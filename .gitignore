@@ -38,5 +38,6 @@ rsconnect/
 
 # Custom
 config.R
+config.yml
 scratch.R
 .csv

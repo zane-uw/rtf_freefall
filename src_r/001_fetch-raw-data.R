@@ -4,34 +4,20 @@ gc()
 library(tidyverse)
 library(dbplyr)
 library(odbc)
+# library(config)
 
 setwd(rstudioapi::getActiveProject())
 
-source("src_r/config.R")
-con <- dbConnect(odbc::odbc(), config$dns, Database = config$sdb, UID = config$uid, PWD = rstudioapi::askForPassword())
-edw <- dbConnect(odbc::odbc(), config$dns, Database = config$edw, UID = config$uid, PWD = rstudioapi::askForPassword())
+# EXTRACT -----------------------------------------------------------------
+x <- config::get("sdb", file = "config.yml")
+con <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = x$pwd)
+x <- config::get("edw", file = "config.yml")
+edw <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = x$pwd)
+rm(x)
 
-# students ----------------------------------------------------------------
 
-# stu <- tbl(con, in_schema("sec", "student_1")) %>%
-#   select(system_key, spcl_program, honors_program, class, enroll_status)
+# get: current yr+qtr -----------------------------------------------------
 
-# stu.mm <- tbl(con, in_schema("sec", "sr_mini_master")) %>%
-#   select(mm_system_key, mm_year, mm_qtr, mm_proc_ind, mm_birth_date, mm_sex, mm_resident, mm_spcl_program,
-#          mm_honors_program, mm_class, mm_ncr_code, starts_with("mm_hs"), mm_hs_gpa = mm_high_sch_gpa,
-#          mm_enroll_status, mm_schol_type, mm_tot_credits, mm_ethnic_code, mm_hispanic_code) %>%
-#   filter(mm_class >= 1 & mm_class <= 4, mm_qtr != 3, mm_year >= 2008, mm_proc_ind == 2) %>%
-#   collect()
-#
-# stu.mm <- stu.mm %>% mutate(yrq = mm_year * 10 + mm_qtr) %>% filter(yrq >= 20084)
-#
-# stu.grp <- tbl(con, in_schema("sec", "sr_student_grp")) %>%
-#   # select() %>%´
-#   collect()# %>%
-#   mutate(fyrq = stu_grp_first_yr * 10 + stu_grp_first_qtr) %>%
-#   filter(fyrq >= 20084)
-
-# Fetch current year + qtr
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   select(current_yr, current_qtr) %>%
   collect() %>%
@@ -45,7 +31,7 @@ dimstu <- tbl(edw, in_schema("sec", "dimStudent")) %>%
   collect()
 
 
-# quarterly transcript ----------------------------------------------------
+# get: quarterly transcript ----------------------------------------------------
 
 transcript <- tbl(con, in_schema("sec", "transcript")) %>% # top_n(n = 1, wt = tran_yr) %>% collect()
   filter(class %in% 1:4, tran_yr >= 2006, add_to_cum == 1) %>%
@@ -60,11 +46,11 @@ transcript <- tbl(con, in_schema("sec", "transcript")) %>% # top_n(n = 1, wt = t
   filter(yrq >= 20064)
 
 
-# Majors ------------------------------------------------------------
+# get: student majors ------------------------------------------------------------
 
 mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>% filter(tran_yr >= 2006) %>% collect()
 
-# grads/degrees granted ---------------------------------------------------
+# get: grads/degrees granted ---------------------------------------------------
 degrees <- tbl(con, in_schema("sec", "student_2_uw_degree_info")) %>%
   filter(deg_earned_yr >= 2006,
          deg_level == 1,
@@ -74,14 +60,7 @@ degrees <- tbl(con, in_schema("sec", "student_2_uw_degree_info")) %>%
   mutate(deg_yrq = deg_earned_yr*10 + deg_earned_qtr) %>%
   filter(deg_yrq >= 20062)
 
-
-# xfer students -----------------------------------------------------------
-
-# transfers <- tbl("con", in_schema("sec", "sr_transfer")) %>%
-#   select(system_key) %>%
-
-
-# first time first year students ------------------------------------------
+# get: first time first year students ------------------------------------------
 
 # first freshman applications
 appl.ftfy <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
@@ -115,7 +94,7 @@ stu1 <- tbl(con, in_schema("sec", "student_1")) %>%
          child_of_alum, running_start, college_in_hs, s1_high_satv, s1_high_satm, s1_high_act) %>%
   collect()
 
-# application data --------------------------------------------------------
+# get: application records (multiple tables) --------------------------------------------------------
 
 # create an in-db filtering file
 fil <- tbl(con, in_schema("sec", "student_1")) %>%
@@ -142,7 +121,7 @@ appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>% se
 appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>% semi_join(fil) %>% collect()
 
 
-# reduce raw data -> dataset -------------------------------------------------------------------
+# TRANSFORM -------------------------------------------------------------------
 rm(con, fil, edw, config)
 
 # save(transcript, dimstu, mjr, degrees, appl_ftfy, stu2.first.reg, stu1, currentq, file = "data/raw-data.RData")
