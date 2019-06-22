@@ -1,0 +1,5 @@
+my_datasource:
+  dns: 'my_dns'
+  uid: 'my_id'
+  pwd: 'my_pwd'
+  db: 'my_database'
