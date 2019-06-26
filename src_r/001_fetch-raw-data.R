@@ -159,6 +159,23 @@ appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>% se
 appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>% semi_join(fil) %>% collect()
 
 
+# unmet course add requests -----------------------------------------------
+
+unmet <- tbl(con, in_schema("sec", "sr_unmet_request")) %>%
+  filter(unmet_yr >= 2006) %>%
+  collect() %>%
+  mutate(yrq = unmet_yr*10 + unmet_qtr) %>%
+  filter(yrq >= 20064) %>%
+  select(system_key = unmet_system_key, yrq) %>%
+  group_by(system_key, yrq) %>%
+  summarize(n.unmet = n())
+# just curious
+unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = sum(n.unmet)) %>% ggplot(., aes(x = yrq, y = y)) + geom_line()
+unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = n_distinct(system_key)) %>% ggplot(., aes(x = yrq, y = y)) + geom_line()
+# unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = median(n.unmet)) %>% ggplot(., aes(x = yrq, y = y)) + geom_line()          # haha
+unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = mean(n.unmet)) %>% ggplot(., aes(x = yrq, y = y)) + geom_line()
+# So the number of students and courses are going up but mean is going down
+
 # TRANSFORM -------------------------------------------------------------------
 rm(con, fil, edw, config)
 
