@@ -176,6 +176,26 @@ unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = n_distinct(
 unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = mean(n.unmet)) %>% ggplot(., aes(x = yrq, y = y)) + geom_line()
 # So the number of students and courses are going up but mean is going down
 
+
+
+# calendar + registration_courses for early/late registration -------------
+
+cal <- tbl(con, in_schema("sec", "sys_tbl_39_calendar")) %>%
+  filter(first_day >= "2000-01-01") %>%                           # arbitrary, some kind of limit is helpful
+  select(table_key, first_day, tenth_day, last_day_add) %>%
+  mutate_if(is.character, trimws) %>%
+  mutate(regis_yr = as.numeric(str_sub(table_key, 2, -2)),
+         regis_qtr = as.numeric(str_sub(table_key, start = -1)),
+         yrq = regis_yr*10 + regis_qtr) %>%
+  collect()
+
+# this table is potentiallly huge so I'm doing the _T_ in place
+regc <- tbl(con, in_schema("sec", "registration_courses")) %>%      # <<--- First add date can be derived here
+  mutate(yrq = regis_yr*10 + regis_qtr) %>%
+  filter(yrq >= 20064) %>%
+  select(system_key, yrq, index1, add_dt_tuit) %>%
+  collect()
+
 # TRANSFORM -------------------------------------------------------------------
 rm(con, fil, edw, config)
 
