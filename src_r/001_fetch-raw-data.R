@@ -8,10 +8,11 @@ library(odbc)
 setwd(rstudioapi::getActiveProject())
 
 # EXTRACT -----------------------------------------------------------------
+# YAML + keyring (don't want plain text pwd stored in potentially shared file)
 x <- config::get("sdb", file = "config.yml")
-con <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = x$pwd)
+con <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = keyring::key_get("sdb"))
 x <- config::get("edw", file = "config.yml")
-edw <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = x$pwd)
+edw <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = keyring::key_get("sdb"))
 rm(x)
 
 # get: current yr+qtr -----------------------------------------------------
@@ -44,8 +45,8 @@ db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
   filter(special_program %in% eop.codes) %>%
   select(system_key) %>%
   distinct() %>%
-  semi_join(yrq1) %>%
-  collect()
+  semi_join(yrq1) # %>%
+  # collect()
 
 rm(yrq1)
 
@@ -122,12 +123,12 @@ stu1 <- tbl(con, in_schema("sec", "student_1")) %>%
 
 # get: application records (multiple tables) --------------------------------------------------------
 
-# create an in-db filtering file
-fil <- tbl(con, in_schema("sec", "student_1")) %>%
+# create an in-db filtering file for the applications
+app.filter <- tbl(con, in_schema("sec", "student_1")) %>%
   select(system_key, appl_yr = current_appl_yr, appl_qtr = current_appl_qtr, appl_no = current_appl_no) %>%
   distinct()
 
-appl.income <- tbl(con, in_schema("sec", "sr_adm_appl_income_data")) %>% semi_join(fil) %>% collect()
+appl.income <- tbl(con, in_schema("sec", "sr_adm_appl_income_data")) %>% semi_join(app.filter) %>% collect()
 
 sr.appl <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
   filter(appl_type %in% c(1, 2, 4, 6, "R"),
@@ -140,7 +141,7 @@ sr.appl <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
          home_addr_code, last_school_type, ncr_code, special_program,
          trans_gpa, aa_degree, direct_transfer,
          appl_cohort, provisional, with_distinction, res_in_question, low_family_income) %>%
-  semi_join(fil) %>%
+  semi_join(app.filter) %>%
   collect()
 
 # best test scores
@@ -149,14 +150,14 @@ appl.hist <- tbl(con, in_schema("sec", "APPLHistApplication")) %>%
          appl_yr >= 2003,
          appl_status %in% c(11, 12, 15, 16, 26)) %>%
   select(system_key, appl_yr, appl_qtr, appl_no, best_satr_v, best_satr_m, best_satr_c) %>%
-  semi_join(fil) %>%
+  semi_join(app.filter) %>%
   collect()
 
 
 
-appl.guardian <- tbl(con, in_schema("sec", "sr_adm_appl_guardian_data")) %>% semi_join(fil) %>% collect()
-appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>% semi_join(fil) %>% collect()
-appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>% semi_join(fil) %>% collect()
+appl.guardian <- tbl(con, in_schema("sec", "sr_adm_appl_guardian_data")) %>% semi_join(app.filter) %>% collect()
+appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>% semi_join(app.filter) %>% collect()
+appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>% semi_join(app.filter) %>% collect()
 
 
 # unmet course add requests -----------------------------------------------
@@ -183,23 +184,74 @@ unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = mean(n.unme
 cal <- tbl(con, in_schema("sec", "sys_tbl_39_calendar")) %>%
   filter(first_day >= "2000-01-01") %>%                           # arbitrary, some kind of limit is helpful
   select(table_key, first_day, tenth_day, last_day_add) %>%
-  mutate_if(is.character, trimws) %>%
-  mutate(regis_yr = as.numeric(str_sub(table_key, 2, -2)),
-         regis_qtr = as.numeric(str_sub(table_key, start = -1)),
-         yrq = regis_yr*10 + regis_qtr) %>%
-  collect()
+  #collect() %>%
+  mutate(yrq = as.numeric(table_key),
+         regis_yr = round(yrq %/% 10, 0),        # r floor div operator works incorrectly in sql tbl, presumably b/c of the % but I'm not looking it up right now
+         regis_qtr = yrq %% 10)
 
-# this table is potentiallly huge so I'm doing the _T_ in place
+# this table is potentiallly huge so I'm doing some transformations in place (it will still be huge)
+# min add dt
 regc <- tbl(con, in_schema("sec", "registration_courses")) %>%      # <<--- First add date can be derived here
+  semi_join(db.eop) %>%
   mutate(yrq = regis_yr*10 + regis_qtr) %>%
   filter(yrq >= 20064) %>%
-  select(system_key, yrq, index1, add_dt_tuit) %>%
-  collect()
+  select(system_key, yrq, add_dt_tuit) %>%
+  group_by(system_key, yrq) %>%
+  filter(add_dt_tuit == min(add_dt_tuit)) %>%
+  distinct() %>%
+  # summarize(med.date = median(add_dt_tuit)) %>%
+  # mutate(pct = percent_rank(add_dt_tuit))
+  # mutate(x = as.numeric(add_dt_tuit)) %>%
+  left_join(cal) %>%
+  collect() %>%
+  mutate(reg.lateness = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
+
+# Because there are some actual nonsense dates in there (1939? REALLY?)
+# fix those by replacing with median values
+regc$reg.lateness[regc$reg.lateness <= -365] <- median(regc$reg.lateness)
 
 # TRANSFORM -------------------------------------------------------------------
-rm(con, fil, edw, config)
+rm(con, app.filter, edw, db.eop)
 
 # save(transcript, dimstu, mjr, degrees, appl_ftfy, stu2.first.reg, stu1, currentq, file = "data/raw-data.RData")
 
-# Processing:
+# Processing
+# join applications and students
+guardian.ed <- appl.guardian %>%
+  group_by(system_key) %>%
+  summarize(guardian.ed.max = max(guardian_ed_level),
+            guardian.ed.min = min(guardian_ed_level)) %>%
+  ungroup()
+income <- appl.income %>%
+  mutate(yrq = appl_yr*10 + appl_qtr) %>%
+  group_by(system_key, yrq) %>%
+  summarize(income_dependent_true = if_else(all(income_dependent == T), T, F),
+            income_gross_median = median(income_gross, na.rm = T),
+            income_fam_size_median = median(income_fam_size, na.rm = T),
+            income_fam_ratio = income_gross_median / income_fam_size_median) %>%
+  ungroup()
+# best.sat <- appl.hist %>%
+#   group_by(system_key) %>%
+#   summarize_at(vars(starts_with('best')), mean, na.rm = T)
+# I'll use the student_1 version in this case but that means that the zeroes need to be converted to missing
 
+# Only use the first appl init major. See the following
+sum(appl.init.major$index1 == 1)
+sum(appl.init.major$index1 >= 2)
+init.placement.major <- appl.init.major %>%
+  group_by(system_key) %>%
+  select(major_abbr) %>%
+  slice(1)
+# in this case, there are enough 2nd/3rd requests that we might want to reshape this and keep them
+# I'm going to treat the "000000" as NA b/c almost all of them occur in the 2nd/3rd choices
+# that leads to _not_ keeping the 2nd/3rd options
+appl.req.major$req_major_abbr[appl.req.major$req_major_abbr == "000000"] <- NA
+# init.req.major <- appl.req.major %>%
+#   select(system_key, index1, req_major_abbr) %>%
+#   mutate_if(is.character, trimws) %>%
+#   mutate(index1 = paste0("req.maj", index1)) %>%
+#   group_by(system_key) %>%
+#   spread(index1, req_major_abbr)
+init.req.major <- appl.req.major %>%
+  filter(index1 == 1) %>%
+  select(system_key, req_major_abbr)
