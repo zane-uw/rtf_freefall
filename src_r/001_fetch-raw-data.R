@@ -15,22 +15,14 @@ x <- config::get("edw", file = "config.yml")
 edw <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = keyring::key_get("sdb"))
 rm(x)
 
-# get: current yr+qtr -----------------------------------------------------
+# get > current yr+qtr -----------------------------------------------------
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   select(current_yr, current_qtr) %>%
   collect() %>%
   mutate(current_yrq = current_yr*10 + current_qtr)
 
-dimstu <- tbl(edw, in_schema("sec", "dimStudent")) %>%
-  filter(StudentClassCode %in% 1:4 | StudentClassGroupShortDesc == "UG") %>%
-  select(StudentKeyId, SDBSrcSystemKey, BirthDate, EthnicGrpAfricanAmerInd, EthnicGrpAfricanAmerInd, EthnicGrpAsianInd,
-         EthnicGrpCaucasianInd, EthnicGrpHawaiiPacIslanderInd, EthnicGrpMultipleInd, EthnicGrpNotIndicatedInd,
-         GenderCode, HispanicInd, InternationalStudentInd, ResidentDesc, StudentClassCode) %>%
-  collect()
-
-
-# get: create filtering query of EOP student ids --------------------------
+# get > create filtering query of EOP student ids --------------------------
 
 # student_2 is created when a student is admitted - contains first yr/qtr, which isn't in _1
 yrq1 <- tbl(con, in_schema("sec", "student_2")) %>%
@@ -50,7 +42,19 @@ db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
 
 rm(yrq1)
 
-# get: quarterly transcript ----------------------------------------------------
+dimstu <- tbl(edw, in_schema("sec", "dimStudent")) %>%
+  filter(StudentClassCode %in% 1:4 | StudentClassGroupShortDesc == "UG") %>%
+  select(SDBSrcSystemKey, EthnicGrpAfricanAmerInd, EthnicGrpAfricanAmerInd, EthnicGrpAsianInd,
+         EthnicGrpCaucasianInd, EthnicGrpHawaiiPacIslanderInd, EthnicGrpMultipleInd, EthnicGrpNotIndicatedInd,
+         GenderCode, HispanicInd, InternationalStudentInd, ResidentDesc, starts_with("Record")) %>%
+  semi_join(db.eop, by = c("SDBSrcSystemKey" = "system_key"), copy = T) %>%
+  collect() %>%
+  group_by(SDBSrcSystemKey) %>%
+  filter(RecordEffEndDttm == max(RecordEffEndDttm)) %>%
+  select(-starts_with("Record"))
+
+
+# get > quarterly transcript ----------------------------------------------------
 
 transcript <- tbl(con, in_schema("sec", "transcript")) %>%
   filter(class %in% 1:4, tran_yr >= 2006, add_to_cum == 1) %>%
@@ -75,14 +79,14 @@ courses.taken <- tbl(con, in_schema("sec", "transcript_courses_taken")) %>%
   filter(yrq >= 20064)
 
 
-# get: student majors ------------------------------------------------------------
+# get > student majors ------------------------------------------------------------
 
 mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
   filter(tran_yr >= 2006) %>%
   semi_join(db.eop) %>%
   collect()
 
-# get: grads/degrees granted ---------------------------------------------------
+# get > grads/degrees granted ---------------------------------------------------
   # degrees <- tbl(con, in_schema("sec", "student_2_uw_degree_info")) %>%
   #   filter(deg_earned_yr >= 2006,
   #          deg_level == 1,
@@ -93,7 +97,7 @@ mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
   #   mutate(deg_yrq = deg_earned_yr*10 + deg_earned_qtr) %>%
   #   filter(deg_yrq >= 20062)
 
-# get: first time first year students ------------------------------------------
+# get > first time first year students ------------------------------------------
 #
 # # first freshman applications
 # appl.ftfy <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
@@ -111,7 +115,7 @@ mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
 #   # 6	UG RET ON LV
 #   # 7	GR RET ON LV
 
-# student_1 merges with appl_yr/qtr/num -----------------------------------
+# get > student_1 merges with appl_yr/qtr/num -----------------------------------
 
 stu1 <- tbl(con, in_schema("sec", "student_1")) %>%
   filter(last_yr_enrolled >= 2004) %>%
@@ -121,10 +125,11 @@ stu1 <- tbl(con, in_schema("sec", "student_1")) %>%
   semi_join(db.eop) %>%
   collect()
 
-# get: application records (multiple tables) --------------------------------------------------------
+# get > application records (multiple tables) --------------------------------------------------------
 
 # create an in-db filtering file for the applications
 app.filter <- tbl(con, in_schema("sec", "student_1")) %>%
+  inner_join(db.eop) %>%
   select(system_key, appl_yr = current_appl_yr, appl_qtr = current_appl_qtr, appl_no = current_appl_no) %>%
   distinct()
 
@@ -160,7 +165,7 @@ appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>% se
 appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>% semi_join(app.filter) %>% collect()
 
 
-# unmet course add requests -----------------------------------------------
+# get > unmet course add requests -----------------------------------------------
 
 unmet <- tbl(con, in_schema("sec", "sr_unmet_request")) %>%
   filter(unmet_yr >= 2006) %>%
@@ -179,7 +184,7 @@ unmet %>% filter(yrq %% 10 != 3) %>% group_by(yrq) %>% summarize(y = mean(n.unme
 
 
 
-# calendar + registration_courses for early/late registration -------------
+# get > calendar + registration_courses for early/late registration -------------
 
 cal <- tbl(con, in_schema("sec", "sys_tbl_39_calendar")) %>%
   filter(first_day >= "2000-01-01") %>%                           # arbitrary, some kind of limit is helpful
@@ -191,7 +196,52 @@ cal <- tbl(con, in_schema("sec", "sys_tbl_39_calendar")) %>%
 
 # this table is potentiallly huge so I'm doing some transformations in place (it will still be huge)
 # min add dt
-regc <- tbl(con, in_schema("sec", "registration_courses")) %>%      # <<--- First add date can be derived here
+#
+# query <- "with dateconvert as(
+#   select system_key,
+#   regis_yr,
+#   regis_qtr,
+#   add_dt_tuit,
+#   percentile_disc(0.5) within group (order by add_dt_tuit)
+#   over(partition by system_key, regis_yr, regis_qtr) as median_add_dt
+#   from UWSDBDataStore.sec.registration_courses
+#   )
+#   select distinct system_key,
+#   regis_yr,
+#   regis_qtr,
+#   add_dt_tuit
+#   into ##med_reg_dates
+#   from dateconvert
+#   where add_dt_tuit = median_add_dt"
+#
+# # med.dates <-
+# DBI::dbGetQuery(con, query)
+
+# regc <- tbl(con, in_schema("sec", "registration_courses")) %>%      # <<--- First add date can be derived here
+#   semi_join(db.eop) %>%
+#   mutate(yrq = regis_yr*10 + regis_qtr) %>%
+#   filter(yrq >= 20064) %>%
+#   select(system_key, yrq, add_dt_tuit) %>%
+#   group_by(system_key, yrq) %>%
+#   filter(add_dt_tuit == min(add_dt_tuit)) %>%
+#   distinct() %>%
+#   # summarize(med.date = median(add_dt_tuit)) %>%
+#   # mutate(pct = percent_rank(add_dt_tuit))
+#   # mutate(x = as.numeric(add_dt_tuit)) %>%
+#   left_join(cal) %>%
+#   collect() %>%
+#   mutate(reg.lateness = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
+# regc <- tbl(con, "##med_reg_dates") %>%
+#   semi_join(db.eop) %>%
+#   mutate(yrq = regis_yr*10 + regis_qtr) %>%
+#   filter(yrq >= 20064) %>%
+#   select(system_key, yrq, add_dt_tuit) %>%
+#   left_join(cal) %>%
+#   collect() %>%
+#   mutate(reg.late.days = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
+
+# "fixes" still don't eliminate the extremely off dates, so I'll stick with the min and correct the ones I see right now
+regc <- tbl(con, in_schema("sec", "registration_courses")) %>%
   semi_join(db.eop) %>%
   mutate(yrq = regis_yr*10 + regis_qtr) %>%
   filter(yrq >= 20064) %>%
@@ -199,24 +249,22 @@ regc <- tbl(con, in_schema("sec", "registration_courses")) %>%      # <<--- Firs
   group_by(system_key, yrq) %>%
   filter(add_dt_tuit == min(add_dt_tuit)) %>%
   distinct() %>%
-  # summarize(med.date = median(add_dt_tuit)) %>%
-  # mutate(pct = percent_rank(add_dt_tuit))
-  # mutate(x = as.numeric(add_dt_tuit)) %>%
   left_join(cal) %>%
   collect() %>%
-  mutate(reg.lateness = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
+  mutate(reg.late.days = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
 
-# Because there are some actual nonsense dates in there (1939? REALLY?)
-# fix those by replacing with median values
-regc$reg.lateness[regc$reg.lateness <= -365] <- median(regc$reg.lateness)
+regc$reg.late.days[regc$reg.late.days <= -365] <- median(regc$reg.late.days[regc$reg.late.days < 0])
+regc$reg.late.binary <- if_else(regc$reg.late.days > 0, 1, 0)
 
-# TRANSFORM -------------------------------------------------------------------
-rm(con, app.filter, edw, db.eop)
+
+# TRANSFORMS -------------------------------------------------------------------
+# rm(con, app.filter, edw, db.eop)
 
 # save(transcript, dimstu, mjr, degrees, appl_ftfy, stu2.first.reg, stu1, currentq, file = "data/raw-data.RData")
 
-# Processing
-# join applications and students
+
+# xform > application tables ----------------------------------------------
+
 guardian.ed <- appl.guardian %>%
   group_by(system_key) %>%
   summarize(guardian.ed.max = max(guardian_ed_level),
@@ -257,7 +305,19 @@ init.req.major <- appl.req.major %>%
   select(system_key, req_major_abbr)
 
 
-# XXXXX -------------------------------------------------------------------
+# xform > student_!, dimStu (EDW) -----------------------------------------
+
+# dimstu + student_1
+student <- stu1 %>%
+  inner_join(dimstu, by = c("system_key" = "SDBSrcSystemKey")) %>%
+  mutate(age = as.numeric(difftime(Sys.Date(), birth_dt, units = "days")) / 364.25)
+
+
+# xform > majors ----------------------------------------------------------
+
+n.majors <- mjr %>%
+  group_by(system_key) %>%
+  summarize(n_distinct(tran_major_abbr))
 
 stu.major <- mjr %>%
   mutate_if(is.character, trimws) %>%
@@ -268,6 +328,20 @@ stu.major <- mjr %>%
   mutate(major.change = if_else(tran_major_abbr == lag(tran_major_abbr, order_by = yrq), 0, 1, missing = 0),
          major.change.count = cumsum(major.change))
 
+# xform > transcript ------------------------------------------------------
 
-
-
+trs <- transcript %>%
+  # exclude summer qtr
+  filter(tran_qtr != 3) %>%
+  mutate(pts = pmax(qtr_grade_points, over_qtr_grade_pt),
+         attmp = pmax(qtr_graded_attmp, over_qtr_grade_at),
+         nongrd = pmax(qtr_nongrd_earned, over_qtr_nongrd),
+         deduct = pmax(qtr_deductible, over_qtr_deduct),
+         qgpa = pts / attmp,
+         tot_creds = attmp + nongrd - deduct,
+         qgpa15 = if_else(qgpa <= 1.5, 1, 0),
+         qgpa20 = if_else(qgpa <= 2, 1, 0),
+         probe = if_else(scholarship_type == 3, 1, 0)) %>%
+  select(system_key, tran_yr, tran_qtr, yrq, class, honors_program, tenth_day_credits,
+         scholarship_type, yearly_honor_type, num_ind_study, num_courses, pts, attmp,
+         nongrd, deduct, qgpa, tot_creds, qgpa15, qgpa20, probe)
