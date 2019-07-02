@@ -255,3 +255,19 @@ appl.req.major$req_major_abbr[appl.req.major$req_major_abbr == "000000"] <- NA
 init.req.major <- appl.req.major %>%
   filter(index1 == 1) %>%
   select(system_key, req_major_abbr)
+
+
+# XXXXX -------------------------------------------------------------------
+
+stu.major <- mjr %>%
+  mutate_if(is.character, trimws) %>%
+  mutate(yrq = tran_yr*10 + tran_qtr) %>%
+  group_by(system_key) %>%
+  filter(index1 == 1) %>%
+  select(system_key, yrq, tran_branch, tran_major_abbr) %>%
+  mutate(major.change = if_else(tran_major_abbr == lag(tran_major_abbr, order_by = yrq), 0, 1, missing = 0),
+         major.change.count = cumsum(major.change))
+
+
+
+
