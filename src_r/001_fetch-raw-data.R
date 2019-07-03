@@ -86,7 +86,7 @@ mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
   semi_join(db.eop) %>%
   collect()
 
-# get > grads/degrees granted ---------------------------------------------------
+# [unused] get > grads/degrees granted ---------------------------------------------------
   # degrees <- tbl(con, in_schema("sec", "student_2_uw_degree_info")) %>%
   #   filter(deg_earned_yr >= 2006,
   #          deg_level == 1,
@@ -97,7 +97,7 @@ mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
   #   mutate(deg_yrq = deg_earned_yr*10 + deg_earned_qtr) %>%
   #   filter(deg_yrq >= 20062)
 
-# get > first time first year students ------------------------------------------
+# [unused] get > first time first year students ------------------------------------------
 #
 # # first freshman applications
 # appl.ftfy <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
@@ -265,12 +265,13 @@ regc$reg.late.binary <- if_else(regc$reg.late.days > 0, 1, 0)
 
 # xform > application tables ----------------------------------------------
 
-guardian.ed <- appl.guardian %>%
+xf.guardian.ed <- appl.guardian %>%
   group_by(system_key) %>%
   summarize(guardian.ed.max = max(guardian_ed_level),
             guardian.ed.min = min(guardian_ed_level)) %>%
   ungroup()
-income <- appl.income %>%
+
+xf.income <- appl.income %>%
   mutate(yrq = appl_yr*10 + appl_qtr) %>%
   group_by(system_key, yrq) %>%
   summarize(income_dependent_true = if_else(all(income_dependent == T), T, F),
@@ -286,7 +287,8 @@ income <- appl.income %>%
 # Only use the first appl init major. See the following
 sum(appl.init.major$index1 == 1)
 sum(appl.init.major$index1 >= 2)
-init.placement.major <- appl.init.major %>%
+
+xf.init.placement.major <- appl.init.major %>%
   group_by(system_key) %>%
   select(major_abbr) %>%
   slice(1)
@@ -294,32 +296,25 @@ init.placement.major <- appl.init.major %>%
 # I'm going to treat the "000000" as NA b/c almost all of them occur in the 2nd/3rd choices
 # that leads to _not_ keeping the 2nd/3rd options
 appl.req.major$req_major_abbr[appl.req.major$req_major_abbr == "000000"] <- NA
-# init.req.major <- appl.req.major %>%
-#   select(system_key, index1, req_major_abbr) %>%
-#   mutate_if(is.character, trimws) %>%
-#   mutate(index1 = paste0("req.maj", index1)) %>%
-#   group_by(system_key) %>%
-#   spread(index1, req_major_abbr)
-init.req.major <- appl.req.major %>%
+xf.init.req.major <- appl.req.major %>%
   filter(index1 == 1) %>%
   select(system_key, req_major_abbr)
-
 
 # xform > student_!, dimStu (EDW) -----------------------------------------
 
 # dimstu + student_1
-student <- stu1 %>%
+xf.student <- stu1 %>%
   inner_join(dimstu, by = c("system_key" = "SDBSrcSystemKey")) %>%
   mutate(age = as.numeric(difftime(Sys.Date(), birth_dt, units = "days")) / 364.25)
 
 
 # xform > majors ----------------------------------------------------------
 
-n.majors <- mjr %>%
+xf.n.majors <- mjr %>%
   group_by(system_key) %>%
   summarize(n_distinct(tran_major_abbr))
 
-stu.major <- mjr %>%
+xf.stu.major <- mjr %>%
   mutate_if(is.character, trimws) %>%
   mutate(yrq = tran_yr*10 + tran_qtr) %>%
   group_by(system_key) %>%
@@ -330,7 +325,7 @@ stu.major <- mjr %>%
 
 # xform > transcript ------------------------------------------------------
 
-trs <- transcript %>%
+xf.trs <- transcript %>%
   # exclude summer qtr
   filter(tran_qtr != 3) %>%
   mutate(pts = pmax(qtr_grade_points, over_qtr_grade_pt),
@@ -345,3 +340,39 @@ trs <- transcript %>%
   select(system_key, tran_yr, tran_qtr, yrq, class, honors_program, tenth_day_credits,
          scholarship_type, yearly_honor_type, num_ind_study, num_courses, pts, attmp,
          nongrd, deduct, qgpa, tot_creds, qgpa15, qgpa20, probe)
+
+
+# xform > student application (main tbl) ----------------------------------
+
+xf.appl <-
+
+
+# xform > late registrations ----------------------------------------------
+
+xf.late.reg <-
+
+
+# xform > unmet course requests -------------------------------------------
+
+xf.unmet.requests <-
+
+
+# COMBINE -----------------------------------------------------------------
+
+# combine > tidy up env --------------------------------------------------------------
+
+# nix <- setdiff(ls(), ls(pattern = "xf.")
+# rm(list = c(nix, "nix"))                    # it amuses me that this works
+cleanup.env <- function(x){
+  # input: x - a str indicating variables to keep, evaluated by ls(pattern = ...)
+
+  # Warning: there will be no warning :D
+
+  # I suppose in a more perfect world this would be passed as '...' and travel through
+  # match.call but that's a lot more code than I want to implement right now
+
+  # I'm not actually sure this will work from within a function
+  # I do know that the imperative ls() implementation won't work as desired w/in a function
+  nix <- setdiff(objects(), objects(pattern = x))
+  rm(list = c(nix, "nix"))
+}
