@@ -1,3 +1,6 @@
+
+# [TODO] get + transform courses taken
+
 rm(list = ls())
 gc()
 
@@ -7,8 +10,9 @@ library(odbc)
 
 setwd(rstudioapi::getActiveProject())
 
+
 # EXTRACT -----------------------------------------------------------------
-# YAML + keyring (don't want plain text pwd stored in potentially shared file)
+# YAML + keyring
 x <- config::get("sdb", file = "config.yml")
 con <- dbConnect(odbc::odbc(), x$dns, Database = x$db, UID = x$uid, PWD = keyring::key_get("sdb"))
 x <- config::get("edw", file = "config.yml")
@@ -257,7 +261,7 @@ regc$reg.late.days[regc$reg.late.days <= -365] <- median(regc$reg.late.days[regc
 regc$reg.late.binary <- if_else(regc$reg.late.days > 0, 1, 0)
 
 
-# TRANSFORMS -------------------------------------------------------------------
+# TRANSFORMATIONS -------------------------------------------------------------------
 # rm(con, app.filter, edw, db.eop)
 
 # save(transcript, dimstu, mjr, degrees, appl_ftfy, stu2.first.reg, stu1, currentq, file = "data/raw-data.RData")
@@ -300,7 +304,16 @@ xf.init.req.major <- appl.req.major %>%
   filter(index1 == 1) %>%
   select(system_key, req_major_abbr)
 
-# xform > student_!, dimStu (EDW) -----------------------------------------
+# main application table
+xf.sr.appl <- sr.appl %>%
+  select(system_key, trans_gpa, aa_degree, direct_transfer, conditional, provisional, with_distinction,
+         res_in_question, low_family_income, appl_class = class, high_sch_gpa, starts_with("hs_"), last_school_type,
+         -hs_esl_engl) %>%
+  mutate(trans_gpa = na_if(trans_gpa, 0),
+         high_sch_gpa = na_if(high_sch_gpa, 0))
+
+
+# xform > student_1, dimStu (EDW) -----------------------------------------
 
 # dimstu + student_1
 xf.student <- stu1 %>%
@@ -341,38 +354,83 @@ xf.trs <- transcript %>%
          scholarship_type, yearly_honor_type, num_ind_study, num_courses, pts, attmp,
          nongrd, deduct, qgpa, tot_creds, qgpa15, qgpa20, probe)
 
-
-# xform > student application (main tbl) ----------------------------------
-
-xf.appl <-
-
+xf.trs.courses <-
 
 # xform > late registrations ----------------------------------------------
 
-xf.late.reg <-
+xf.late.reg <- regc %>%
+  select(system_key, yrq, reg.late.days, reg.late.binary)
 
 
 # xform > unmet course requests -------------------------------------------
 
-xf.unmet.requests <-
+xf.unmet.requests <- unmet
 
+# xform > misc stuff
+# do we assume missing running start is a 'No'?
+# to.new.val <- function(x, val, newval){
+#   x[x == val] <- newval
+#   x
+# }
+(i <- sapply(xf.student, is.character))
+apply(xf.student[,i], 2, unique)
+
+xf.student$running_start[xf.student$running_start == " "] <- "N"
+xf.student$s1_gender[xf.student$s1_gender == " "] <- NA
+xf.student <- subset(xf.student, select = -c(GenderCode, ethnic_code, hispanic_code, high_sch_ceeb_cd, current_appl_yr,
+                                             current_appl_qtr, current_appl_no, admitted_for_yr, admitted_for_qtr,
+                                             birth_dt, last_yr_enrolled, last_qtr_enrolled))
+
+# [TODO] age isn't technically correctly coded for transcript records. Need to correct this.
 
 # COMBINE -----------------------------------------------------------------
 
+# [TODO] a functional way to merge all these dataframes for quick modifications to the included data tables
+
 # combine > tidy up env --------------------------------------------------------------
 
-# nix <- setdiff(ls(), ls(pattern = "xf.")
-# rm(list = c(nix, "nix"))                    # it amuses me that this works
-cleanup.env <- function(x){
-  # input: x - a str indicating variables to keep, evaluated by ls(pattern = ...)
+rm(list = setdiff(objects(), objects(pattern = "xf.")))       # ls() works fine too. BONUS CHALLENGE: wrap this in a function XP
 
-  # Warning: there will be no warning :D
+# combine > merge datasets beginning w/ the 'wide' application data -------------------------
+# I'm doing in this in more steps that are strictly necessary in order to facilitate in-place/imperative
+# validation as needed
+# e.g. this potential problem of making extra work later using ML models that aren't robust to missing inputs
+# which depends on one's comfort w/ complete.cases v. more records w/ fewer columns <img-hypercube>
+n.in <- function(source, target){   # source typically ought to be the known/a priori more complete of the two
+  su <- unique(source)
+  tu <- unique(target)        # list input would be nice
+  over <- sum(su %in% tu)
 
-  # I suppose in a more perfect world this would be passed as '...' and travel through
-  # match.call but that's a lot more code than I want to implement right now
-
-  # I'm not actually sure this will work from within a function
-  # I do know that the imperative ls() implementation won't work as desired w/in a function
-  nix <- setdiff(objects(), objects(pattern = x))
-  rm(list = c(nix, "nix"))
+  print(paste("src:", length(su), sep = " "))
+  print(paste("targ:", length(tu), sep = " "))
+  print(paste("overlap:", over, sep = " "))
+  print(paste("missing from target:", length(su) - over, sep = " "))
 }
+n.in(xf.sr.appl$system_key, xf.income$system_key)
+n.in(xf.sr.appl$system_key, xf.guardian.ed$system_key)
+n.in(xf.sr.appl$system_key, xf.init.placement.major$system_key)
+n.in(xf.sr.appl$system_key, xf.init.req.major$system_key)
+
+# mrg.appl <- xf.trs %>%
+#   left_join(xf.guardian.ed) %>%
+#   left_join(xf.income) %>%
+#   left_join(xf.init.placement.major) %>%
+#   left_join(xf.init.req.major)
+
+# Let's focus on the transcript + main appl file
+n.in(xf.sr.appl$system_key, xf.trs$system_key)
+
+mrg.dat <- xf.trs %>%
+  inner_join(xf.student) %>%
+  left_join(xf.sr.appl) %>%
+  left_join(xf.late.reg) %>%
+  left_join(xf.stu.major) %>%
+  left_join(xf.unmet.requests)
+
+
+# combine > create some initial features ----------------------------------
+
+# FT = 12 credits
+mrg.dat$ft <- ifelse(mrg.dat$tenth_day_credits >= 12, T, F)
+mrg.dat$ft.creds.over <- ifelse(mrg.dat$tenth_day_credits >= 12,
+                                mrg.dat$tenth_day_credits - 12, 0)
