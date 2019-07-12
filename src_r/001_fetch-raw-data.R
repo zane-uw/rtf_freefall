@@ -1,6 +1,3 @@
-
-# [TODO] get + transform courses taken
-
 rm(list = ls())
 gc()
 
@@ -262,9 +259,6 @@ regc$reg.late.binary <- if_else(regc$reg.late.days > 0, 1, 0)
 
 
 # TRANSFORMATIONS -------------------------------------------------------------------
-# rm(con, app.filter, edw, db.eop)
-
-# save(transcript, dimstu, mjr, degrees, appl_ftfy, stu2.first.reg, stu1, currentq, file = "data/raw-data.RData")
 
 
 # xform > application tables ----------------------------------------------
@@ -352,9 +346,35 @@ xf.trs <- transcript %>%
          probe = if_else(scholarship_type == 3, 1, 0)) %>%
   select(system_key, tran_yr, tran_qtr, yrq, class, honors_program, tenth_day_credits,
          scholarship_type, yearly_honor_type, num_ind_study, num_courses, pts, attmp,
-         nongrd, deduct, qgpa, tot_creds, qgpa15, qgpa20, probe)
+         nongrd, deduct, qgpa, tot_creds, qgpa15, qgpa20, probe) %>%
+  group_by(system_key) %>%
+  arrange(system_key, yrq) %>%
+  mutate(cum.pts = cumsum(pts),
+         cum.attmp = cumsum(attmp),
+         cum.gpa = cum.pts / cum.attmp) %>%
+  ungroup()
 
-xf.trs.courses <-
+xf.trs.courses <- courses.taken %>%
+  filter(tran_qtr != 3) %>%
+  mutate_if(is.character, trimws) %>%
+  mutate(course = paste(dept_abbrev, course_number, sep = "_")) %>%
+  select(system_key, yrq, course.index = index1, course, course_branch, grade, repeat_course, honor_course)
+
+xf.trs.courses$numeric.grade <- recode(xf.trs.courses$grade,
+                                       "A"  = "40",
+                                       "A-" = "38",
+                                       "B+" = "34",
+                                       "B"  = "31",
+                                       "B-" = "28",
+                                       "C+" = "24",
+                                       "C"  = "21",
+                                       "C-" = "18",
+                                       "D+" = "14",
+                                       "D"  = "11",
+                                       "D-" = "08",
+                                       "E"  = "00",
+                                       "F"  = "00")
+xf.trs.courses$course.withdraw <- ifelse(grepl("W", xf.trs.courses$grade), 1, 0)
 
 # xform > late registrations ----------------------------------------------
 
@@ -427,10 +447,17 @@ mrg.dat <- xf.trs %>%
   left_join(xf.stu.major) %>%
   left_join(xf.unmet.requests)
 
-
 # combine > create some initial features ----------------------------------
 
 # FT = 12 credits
 mrg.dat$ft <- ifelse(mrg.dat$tenth_day_credits >= 12, T, F)
 mrg.dat$ft.creds.over <- ifelse(mrg.dat$tenth_day_credits >= 12,
                                 mrg.dat$tenth_day_credits - 12, 0)
+mrg.dat$n.unmet[is.na(mrg.dat$n.unmet)] <- 0
+mrg.dat$s1_high_act[mrg.dat$s1_high_act == 0] <- NA
+mrg.dat$s1_high_satm[mrg.dat$s1_high_satm == 0] <- NA
+mrg.dat$s1_high_satv[mrg.dat$s1_high_satv == 0] <- NA
+
+# save --------------------------------------------------------------------
+
+save(mrg.dat, file = "data/merged-dataset.RData")
