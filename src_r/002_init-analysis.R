@@ -100,13 +100,14 @@ rm(sat, act)
 #            last_school_type, reg.late.days, reg.late.binary, tran_branch, tran_major_abbr, major.change, major.change.count, n.unmet,
 #            ft, ft.creds.over)
 
+# not using majors (future: split data to ensure levels between train/test)
 dat <- dat %>%
   select(Y_i, class, honors_program, tenth_day_credits, scholarship_type, num_ind_study, num_courses, attmp, nongrd, deduct,
-         tot_creds, starts_with("l1."), starts_with("l2."), s1_gender, child_of_alum, running_start, s1_high_satv, s1_high_satm, s1_high_act,
-         s1_high_act, starts_with("Ethnic"), HispanicInd, InternationalStudentInd, ResidentDesc, age, trans_gpa, aa_degree, direct_transfer,
+         tot_creds, starts_with("l1."), starts_with("l2."), s1_gender, child_of_alum, running_start, std_test_high, # s1_high_satv, s1_high_satm, s1_high_act,
+         starts_with("Ethnic"), HispanicInd, InternationalStudentInd, ResidentDesc, age, trans_gpa, aa_degree, direct_transfer,
          conditional, provisional, with_distinction, res_in_question, low_family_income, appl_class, high_sch_gpa, starts_with("hs_"),
-         last_school_type, reg.late.days, reg.late.binary, tran_branch, tran_major_abbr, major.change, major.change.count, n.unmet,
-         ft, ft.creds.over)
+         last_school_type, reg.late.days, reg.late.binary, tran_branch, major.change, major.change.count, n.unmet,
+         ft, ft.creds.over) # tran_major_abbr
 
 # Validation checks -------------------------------------------------------
 
