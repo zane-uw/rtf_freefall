@@ -167,7 +167,9 @@ test_y <- as.factor(testing$Y)
 
 # setup control
 xgb.ctrl <- trainControl(method = "cv",
-                     number = 3)
+                     number = 3,
+                     verboseIter = F,
+                     allowParallel = T)
 
 nrounds <- 1e3
 grid_init <- expand.grid(nrounds = seq(200, nrounds, 50),
