@@ -9,6 +9,8 @@ gc()
 
 
 library(caret)
+library(xgboost)
+library(xgboostExplainer)
 library(doMC)
 library(tidyverse)
 
@@ -148,22 +150,22 @@ confusionMatrix(fit.pr, reference = testing$Y, mode = "prec_recall", positive = 
 
 # Fit via XGB -------------------------------------------------------------
 
-# xgb can handle missing data
+# xgb can handle missing data but caret is weird about it
 # preprocessing steps
-dv <- dummyVars(Y ~., data = mod.dat)
-xgb.dat <- data.frame(predict(dv, newdata = mod.dat))
-xgb.dat$Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
+# dv <- dummyVars(Y ~., data = mod.dat)
+# xgb.dat <- data.frame(predict(dv, newdata = mod.dat))
+# xgb.dat$Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
 
-xgb.dat <- xgb.dat[,-nearZeroVar(xgb.dat)]
+xgb.dat <- mod.dat[,-nearZeroVar(mod.dat)]
 # split
 i.train <- createDataPartition(y = xgb.dat$Y, p = .80, list = F)
 # i <- varwhich(dat, "Y_i")
 training <- xgb.dat[i.train,]
-train_x <- subset(training, select = -c(Y))
-train_y <- as.factor(training$Y)
+# train_x <- subset(training, select = -c(Y))
+# train_y <- as.factor(training$Y)
 testing  <- xgb.dat[-i.train,]
-test_x <- subset(testing, select = -c(Y))
-test_y <- as.factor(testing$Y)
+# test_x <- subset(testing, select = -c(Y))
+# test_y <- as.factor(testing$Y)
 
 # setup control
 xgb.ctrl <- trainControl(method = "cv",
@@ -181,9 +183,23 @@ grid_init <- expand.grid(nrounds = seq(200, nrounds, 50),
                          subsample = 1)
 
 xgb.fit <- train(Y ~.,
-             x = train_x,
-             y = train_y,
+             data = training,
              method = "xgbTree",
              trControl= xgb.ctrl,
              tuneGrid = grid_init,
              verbose = T)
+###
+# to avoid re-running this while I update a slew of stuff:
+# save.image()
+# load(".RData")
+###
+
+# predictions for test set
+xgb.pr <- predict(xgb.fit, newdata = testing)
+confusionMatrix(xgb.pr, testing$Y, positive = "1", mode = "everything")
+densityplot(xgb.fit, pch = "|")
+
+ep <- predict(xgb.fit, newdata = testing, type = "prob")
+par(mfrow = c(1,2))
+hist(ep[,1]); hist(ep[,2])
+par(mfrow = c(1,1))
