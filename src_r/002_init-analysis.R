@@ -13,6 +13,7 @@ library(xgboost)
 library(xgboostExplainer)
 library(doMC)
 library(tidyverse)
+library(pROC)
 
 registerDoMC(cores = 4)
 set.seed(4567)
@@ -203,3 +204,124 @@ ep <- predict(xgb.fit, newdata = testing, type = "prob")
 par(mfrow = c(1,2))
 hist(ep[,1]); hist(ep[,2])
 par(mfrow = c(1,1))
+
+# var imp plot
+col.names = names(training[,-1])
+imp = xgb.importance(col.names, xgb.fit$finalModel)
+xgb.plot.importance(imp)
+
+
+# xgb explainer -----------------------------------------------------------
+
+dv <- dummyVars(Y ~., data = xgb.dat)
+X <- data.frame(predict(dv, newdata = mod.dat))
+Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
+# split
+i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
+
+train_x <- X[i.train,]
+train_y <- Y[i.train]
+
+test_x <- X[-i.train,]
+test_y <- Y[-i.train]
+
+# cv setup
+cv <- createFolds(train_y, k = 7)
+# control
+ctrl <- trainControl(method = "cv", index = cv)
+xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
+param <- list(objective = "binary:logistic", base_score = 0.5)
+
+# fit
+xgboost.cv = xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
+# pick best, run
+best_iteration = xgboost.cv$best_iteration
+xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds=best_iteration)
+# predictions
+xgb.test.data = xgb.DMatrix(data.matrix(test_x), missing = NA)
+xgb.preds = predict(xgb.model, xgb.test.data)
+xgb.roc_obj <- roc(test_y, xgb.preds)
+cat("XGB AUC ", auc(xgb.roc_obj))
+
+# importance
+col_names = attr(xgb.train.data, ".Dimnames")[[2]]
+imp = xgb.importance(col_names, xgb.model)
+xgb.plot.importance(imp)
+
+explr = buildExplainer(xgb.model, trainingData = xgb.train.data, type = "binary", base_score = 0.5, trees_idx = NULL)
+pred.breakdown = explainPredictions(xgb.model, explr, xgb.test.data)
+
+# cat('Breakdown Complete','\n')
+weights = rowSums(pred.breakdown)
+pred.xgb = 1/(1+exp(-weights))
+cat(max(xgb.preds-pred.xgb),'\n')
+
+idx_to_get = as.integer(802)
+test_x[idx_to_get,]
+showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x) ,idx_to_get, type = "binary")
+
+# how about someone w/ a high prob?
+pr <- predict(xgb.model, xgb.test.data)
+showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "binary")
+
+pr.cut <- cut(pr, 5)
+table(pr.cut, test_y)
+
+
+# XGB Explainer: Y = Quarterly GPA ----------------------------------------
+
+reg.dat <- dat %>%
+  select(Y = qgpa, class.standing, tenth_day_credits, num_ind_study,
+         num_courses, attmp, nongrd, deduct, tot_creds,
+         s1_gender, running_start, std_test_high, starts_with("Ethnic"), HispanicInd,
+         InternationalStudentInd, age, conditional, provisional, res_in_question,
+         low_family_income, appl_class, high_sch_gpa, starts_with("hs"),
+         ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary)
+
+dv <- dummyVars(Y ~., data = reg.dat)
+regX <- data.frame(predict(dv, newdata = reg.dat))
+regY <- reg.dat$Y
+# split
+i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
+train_x <- regX[i.train,]
+train_y <- regY[i.train]
+test_x <- regX[-i.train,]
+test_y <- regY[-i.train]
+
+# cv setup
+cv <- createFolds(train_y, k = 7)
+# control
+ctrl <- trainControl(method = "cv", index = cv)
+xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
+param <- list(objective = "reg:linear", base_score = 0.5)
+
+# fit -> select
+xgboost.cv <- xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics = "rmse")
+best_iteration <- xgboost.cv$best_iteration
+xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds = best_iteration)
+# predictions
+xgb.test.data <- xgb.DMatrix(data.matrix(test_x), missing = NA)
+xgb.preds <- predict(xgb.model, xgb.test.data)
+
+# importance
+col_names <- attr(xgb.train.data, ".Dimnames")[[2]]
+imp <- xgb.importance(col_names, xgb.model)
+xgb.plot.importance(imp)
+
+explr <- buildExplainer(xgb.model, trainingData = xgb.train.data, type = "regression", base_score = 0.5, trees_idx = NULL)
+pred.breakdown <- explainPredictions(xgb.model, explr, xgb.test.data)
+
+gpa.pred <- predict(xgb.model, xgb.test.data)
+par(mfrow = c(1,2))
+hist(gpa.pred, main = "test-predictions")
+hist(test_y, main = "test-truth")
+par(mfrow = c(1,1))
+plot(test_y, gpa.pred)
+test.resid <- test_y - gpa.pred
+hist(test.resid, main = "residuals")
+plot(test.resid, test_y)
+table(cut(test.resid, breaks = 7))
+
+
+showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "regression")
+showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), which(gpa.pred == min(gpa.pred)), type = "regression")
