@@ -325,3 +325,50 @@ table(cut(test.resid, breaks = 7))
 
 showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "regression")
 showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), which(gpa.pred == min(gpa.pred)), type = "regression")
+
+# var breakdown plot(s)
+plot(test_x$std_test_high, pred.breakdown$std_test_high)
+
+
+
+# build data for python ---------------------------------------------------
+library(ssh)
+pydat <- mrg.dat[,-nearZeroVar(mrg.dat)]
+pydat <- pydat %>%
+  select(-tran_yr, -tran_qtr) %>%
+  group_by(system_key) %>%
+  arrange(yrq, .by_group = T) %>%
+  mutate(qtr.num = row_number(),    # xgboost package is fine w/ leaving missing data, don't recode now
+         Y = lead(cum.gpa, n = 1),
+         n.unmet.cum = cumsum(n.unmet),
+         reg.late.mean = mean(reg.late.days)) %>%
+  ungroup() %>%
+  select(system_key, Y, qtr.num, class, tenth_day_credits, scholarship_type,
+         num_courses, pts, attmp, nongrd, deduct, qgpa, tot_creds, cum.pts, cum.attmp,
+         s1_gender, child_of_alum, running_start, s1_high_satm, s1_high_satv, s1_high_act,
+         starts_with("EthnicGrp"), HispanicInd, ResidentDesc, age,
+         trans_gpa, conditional, with_distinction, low_family_income, appl_class,
+         high_sch_gpa, starts_with("hs_"), last_school_type, reg.late.days,
+         reg.late.mean, tran_major_abbr, major.change, major.change.count, n.unmet,
+         n.unmet.cum, ft, ft.creds.over) %>%
+  mutate(class = factor(class))
+
+# construct dummy var matrix
+dv <- dummyVars(Y ~., data = pydat)
+X <- data.frame(predict(dv, newdata = pydat))
+Y <- pydat$Y
+XY <- cbind(Y, X)
+# split
+i.train <- sample(1:nrow(pydat), size = nrow(pydat)*.8, replace = F)
+pytrain <- XY[i.train,]
+pytest <- XY[-i.train,]
+
+sesh <- ssh_connect('zane@axdd-assessment.s.uw.edu')
+# remote.path <- "data/rtf_freefall"
+write_csv(pytrain, "data/pytrain.csv")
+write.csv(pytest, "data/pytest.csv")
+write.csv(pydat, "data/pydat.csv")
+scp_upload(sesh, files = "data/pytrain.csv", to = "data/freefall", verbose = T)
+scp_upload(sesh, files = "data/pytest.csv", to = "data/freefall", verbose = T)
+scp_upload(sesh, files = "data/pydat.csv", to = "data/freefall", verbose = T)
+ssh_disconnect(sesh)
