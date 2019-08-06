@@ -366,8 +366,8 @@ pytest <- XY[-i.train,]
 sesh <- ssh_connect('zane@axdd-assessment.s.uw.edu')
 # remote.path <- "data/rtf_freefall"
 write_csv(pytrain, "data/pytrain.csv")
-write.csv(pytest, "data/pytest.csv")
-write.csv(pydat, "data/pydat.csv")
+write_csv(pytest, "data/pytest.csv")
+write_csv(pydat, "data/pydat.csv")
 scp_upload(sesh, files = "data/pytrain.csv", to = "data/freefall", verbose = T)
 scp_upload(sesh, files = "data/pytest.csv", to = "data/freefall", verbose = T)
 scp_upload(sesh, files = "data/pydat.csv", to = "data/freefall", verbose = T)
