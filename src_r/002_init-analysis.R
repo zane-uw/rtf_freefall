@@ -1,6 +1,6 @@
 # Comments ----------------------------------------------------------------
 
-# For this file, let's focus on predicting quarterly GPA <= 2.5
+# For this file, let's focus on predicting quarterly GPA <= 2.5 (binary)
 
 # Setup -------------------------------------------------------------------
 
@@ -34,6 +34,22 @@ Cs <- function(...){as.character(sys.call())[-1]}
 #' varwhich(mtcars, 'cyl')
 varwhich <- function(df, x){ return( which(names(df) == x) ) }
 
+#' convert SQL Y/N to numeric 0/1
+#' Should result in NA for non-Y/N values
+#'
+#' @param x a vector of Y/N values
+#' @example
+#' binarize.yn(c('Y', 'Y', 'N', 'Y', 'Q'))
+#' [TODO] - make general function with in/out text opts
+binarize.yn <- function(x){
+  y <- rep(NA, length.out = length(x)) # vector(mode = 'numeric', length = length(x))
+  # I usually prefer the first syntax for this task iot simplify NA's; vector() will create 0's if mode = 'numeric'
+  # although one might get away with unlist(...(mode = 'list')) :P
+  y[x == "Y"] <- 1
+  y[x == "N"] <- 0
+  return(y)
+}
+
 setwd(rstudioapi::getActiveProject())
 
 load("data/merged-dataset.RData")
@@ -54,7 +70,7 @@ load("data/merged-dataset.RData")
 #          l1.cum.attmp = lag(cum.attmp)) %>%
 #    ungroup() %>%
 
-# [TODO] Rather than use lag funs, I'll create some quarterly features - that probably means converting data to wide
+# [TODO] Rather than use lag funs, I'll create some quarterly features
 
 # pre-processing ----------------------------------------------------------
 
@@ -131,22 +147,87 @@ testing  <- mod.dat[-i.train,]
 # ctrl <- trainControl(method = "repeatedcv",
 #                      number = 10,
 #                      repeats = 3)
-ctrl <- trainControl(method = "cv", number = 10)
+glmnet.ctrl <- trainControl(method = "cv", number = 5) #10)
 
 # Fit via GLMNET ---------------------------------------------------------------
 
-fit <- train(Y ~.,
+cvfit <- train(Y ~.,
              data = training,
              method = "glmnet",
-             trControl= ctrl,
+             trControl = glmnet.ctrl,
              # glmnet options
              family = "binomial",
-             tuneGrid = expand.grid(alpha = 0, lambda = seq(0.001, 0.1, by = 0.001)))
+             tuneGrid = expand.grid(alpha = .5, lambda = seq(0.001, 0.1, by = 0.001)))
 
-confusionMatrix(fit)
-fit.pr <- predict(fit, newdata = testing)
-confusionMatrix(fit.pr, reference = testing$Y, mode = "prec_recall", positive = "1")
+confusionMatrix(cvfit)
+cvfit.pr <- predict(cvfit, newdata = testing)
+confusionMatrix(cvfit.pr, reference = testing$Y, mode = "prec_recall", positive = "1")
+# fit$results
+cvfit$bestTune
+plot(cvfit)
 
+
+
+# Fit via GBM (caret) -----------------------------------------------------
+
+gbm.ctrl <- trainControl(method = 'cv',
+                         number = 5,
+                         returnResamp = 'none',
+                         summaryFunction = twoClassSummary,
+                         classProbs = T)
+
+# need to redo some data for GBM testing
+gbmdat <- rbind(testing, training)
+gbmdat$Y <- as.numeric(levels(gbmdat$Y))[gbmdat$Y]
+gbmdat$Y <- factor(gbmdat$Y, levels = c(1, 0), labels = c('Y', 'N'))
+gbmdat$s1_gender <- ifelse(gbmdat$s1_gender == "M", 0, 1)
+i <- sapply(gbmdat, is.character)
+gbmdat[,i] <- apply(gbmdat[,i], 2, binarize.yn)
+# change logicals
+(i <- sapply(gbmdat, is.logical))
+gbmdat[,i] <- apply(gbmdat[,i], 2, function(x){
+  ifelse(x == T, 1, 0)
+})
+j <- sample(1:nrow(gbmdat), replace = F, size = .7*nrow(gbmdat))
+Y <- gbmdat$Y[j]
+X <- gbmdat[j, -1]
+test.y <- gbmdat$Y[-j]
+test.x <- gbmdat[-j, -1]
+#
+# Y <- as.numeric(levels(training$Y))[training$Y]
+# Y <- factor(Y, levels = c(1, 0), labels = c('Y', 'N'))
+# X <- subset(training, select = -c(Y))
+# X$s1_gender <- ifelse(X$s1_gender == "M", 0, 1)     # function for Y/N should be more robust at some point
+# i <- sapply(X, is.character)                        # or this check should be more intelligent
+# X[,i] <- apply(X[,i], 2, binarize.yn)
+# # change logi's
+# (i <- sapply(X, is.logical))
+# X[,i] <- apply(X[,i], 2, function(x){
+#   ifelse(x == T, 1, 0)
+# })
+
+gbmfit <- train(x = X,
+                y = Y,
+                method = 'gbm',
+                trControl = gbm.ctrl,
+                metric = 'ROC',
+                preProc = c("center", "scale"))
+
+# eval
+summary(gbmfit)
+print(gbmfit)
+gbm.pred <- predict(gbmfit, test.x, 'raw')
+table(gbm.pred, test.y)                       # not so good (ROC is a bad eval metric)
+postResample(gbm.pred, test.y)
+
+gbm.pp <- predict(gbmfit, test.x, 'prob')
+head(gbm.pp)
+auc <- roc(ifelse(test.y == 'Y', 1, 0), gbm.pp[,1])
+print(auc$auc)
+plot(auc)
+
+table(cut(gbm.pp[,1], breaks = 5))
+table(cut(gbm.pp[,1], breaks = 5), test.y)    # yeah, a lot of low-probability Y's
 
 
 # Fit via XGB -------------------------------------------------------------

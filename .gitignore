@@ -43,3 +43,5 @@ config.yml
 scratch.R
 .csv
 *Icon*
+# always ignore data!
+data/
