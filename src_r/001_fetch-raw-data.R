@@ -355,10 +355,12 @@ xf.trs <- transcript %>%
   ungroup()
 
 xf.trs.courses <- courses.taken %>%
-  filter(tran_qtr != 3) %>%
+  # filter(tran_qtr != 3) %>%
   mutate_if(is.character, trimws) %>%
-  mutate(course = paste(dept_abbrev, course_number, sep = "_")) %>%
-  select(system_key, yrq, course.index = index1, course, course_branch, grade, repeat_course, honor_course)
+  mutate(course = paste(dept_abbrev, course_number, sep = "_"),
+         duplicate_indic = as.numeric(duplicate_indic)) %>%
+  rename(course.index = index1) %>%
+  select(-tran_yr, -tran_qtr)
 
 xf.trs.courses$numeric.grade <- recode(xf.trs.courses$grade,
                                        "A"  = "40",
@@ -375,12 +377,12 @@ xf.trs.courses$numeric.grade <- recode(xf.trs.courses$grade,
                                        "E"  = "00",
                                        "F"  = "00")
 xf.trs.courses$course.withdraw <- ifelse(grepl("W", xf.trs.courses$grade), 1, 0)
-
+xf.trs.courses$course.nogpa <- ifelse(xf.trs.courses$grade %in% c("", "CR", "H", "HP", "HW", "I", "N", "NC", "NS", "P", "S", "W", "W3", "W4", "W5", "W6", "W7"), 1, 0)
+# table(xf.trs.courses$grade, xf.trs.courses$course.nogpa)
 # xform > late registrations ----------------------------------------------
 
 xf.late.reg <- regc %>%
   select(system_key, yrq, reg.late.days, reg.late.binary)
-
 
 # xform > unmet course requests -------------------------------------------
 
@@ -461,3 +463,5 @@ mrg.dat$s1_high_satv[mrg.dat$s1_high_satv == 0] <- NA
 # save --------------------------------------------------------------------
 
 save(mrg.dat, file = "data/merged-dataset.RData")
+# may use these later
+save(courses.taken, xf.trs.courses, file = 'data/courses-taken.RData')

@@ -11,14 +11,18 @@ gc()
 library(caret)
 library(xgboost)
 library(xgboostExplainer)
-library(doMC)
 library(tidyverse)
 library(pROC)
+library(doParallel)
 
-registerDoMC(cores = 4)
 set.seed(4567)
 theme_set(theme_bw(base_size = 14))
 options(tibble.print_max = 500)
+
+# parallel setup
+cl <- makeCluster((detectCores() - 1), type = "PSOCK")
+registerDoParallel(cl)
+
 
 #' Add quotes to an unquoted list of characters
 #'
@@ -147,14 +151,14 @@ testing  <- mod.dat[-i.train,]
 # ctrl <- trainControl(method = "repeatedcv",
 #                      number = 10,
 #                      repeats = 3)
-glmnet.ctrl <- trainControl(method = "cv", number = 5) #10)
+ctrl <- trainControl(method = "cv", number = 5) #10)
 
 # Fit via GLMNET ---------------------------------------------------------------
 
 cvfit <- train(Y ~.,
              data = training,
              method = "glmnet",
-             trControl = glmnet.ctrl,
+             trControl = ctrl,
              # glmnet options
              family = "binomial",
              tuneGrid = expand.grid(alpha = .5, lambda = seq(0.001, 0.1, by = 0.001)))
@@ -167,14 +171,7 @@ cvfit$bestTune
 plot(cvfit)
 
 
-
 # Fit via GBM (caret) -----------------------------------------------------
-
-gbm.ctrl <- trainControl(method = 'cv',
-                         number = 5,
-                         returnResamp = 'none',
-                         summaryFunction = twoClassSummary,
-                         classProbs = T)
 
 # need to redo some data for GBM testing
 gbmdat <- rbind(testing, training)
@@ -193,41 +190,145 @@ Y <- gbmdat$Y[j]
 X <- gbmdat[j, -1]
 test.y <- gbmdat$Y[-j]
 test.x <- gbmdat[-j, -1]
-#
-# Y <- as.numeric(levels(training$Y))[training$Y]
-# Y <- factor(Y, levels = c(1, 0), labels = c('Y', 'N'))
-# X <- subset(training, select = -c(Y))
-# X$s1_gender <- ifelse(X$s1_gender == "M", 0, 1)     # function for Y/N should be more robust at some point
-# i <- sapply(X, is.character)                        # or this check should be more intelligent
-# X[,i] <- apply(X[,i], 2, binarize.yn)
-# # change logi's
-# (i <- sapply(X, is.logical))
-# X[,i] <- apply(X[,i], 2, function(x){
-#   ifelse(x == T, 1, 0)
-# })
 
-gbmfit <- train(x = X,
-                y = Y,
-                method = 'gbm',
-                trControl = gbm.ctrl,
-                metric = 'ROC',
-                preProc = c("center", "scale"))
+    #
+    # # control setup
+    #
+    # # tgrid <- expand.grid(interaction.depth = 6,
+    # #                      n.trees = 500,
+    # #                      shrinkage = .01,
+    # #                      n.minobsinnode = 20)
+    #
+    # ctrl <- trainControl(method = 'cv',
+    #                      number = 5,
+    #                      # summaryFunction = twoClassSummary,   # for ROC
+    #                      classProbs = T,
+    #                      allowParallel = T,
+    #                      verboseIter = T)
+    #
+    # # fit
+    # gbmfit <- train(x = X,
+    #                 y = Y,
+    #                 method = 'gbm',
+    #                 trControl = ctrl,
+    #                 metric = 'Kappa',
+    #                 preProc = c("center", "scale")) # ,
+    #                 # tuneGrid = tgrid)
+    #
+    # # eval
+    # summary(gbmfit)
+    # print(gbmfit)
+    # gbm.pred <- predict(gbmfit, test.x, 'raw')
+    # table(gbm.pred, test.y)
+    # postResample(gbm.pred, test.y)
+    #
+    # gbm.pp <- predict(gbmfit, test.x, 'prob')
+    # head(gbm.pp)
+    # auc <- roc(ifelse(test.y == 'Y', 1, 0), gbm.pp[,1])
+    # print(auc$auc)
+    # plot(auc)
+    #
+    # table(cut(gbm.pp[,1], breaks = 5))
+    # table(cut(gbm.pp[,1], breaks = 5), test.y)    # lot of low-probability Y's
+    #
+    #
+    # ctrl$summaryFunction <- twoClassSummary
+    # gbmroc <- train(x = X,
+    #                 y = Y,
+    #                 method = 'gbm',
+    #                 trControl = ctrl,
+    #                 metric = 'ROC',
+    #                 preProc = c("center", "scale"))
+    # # Kappa v ROC
+    # print(gbmfit)
+    # print(gbmroc)
+    # table(gbm.pred, test.y)
+    # table(predict(gbmroc, test.x, 'raw'), test.y)
+    # # both have high false negative rates
+    #
+    # # GBM adjustments ---------------------------------------------------------
+    #
+    # # adjust for class imbalance; sampling inside training proc
+    # tgrid <- expand.grid(interaction.depth = c(5, 7, 9),
+    #                      n.trees = 500,
+    #                      shrinkage = .01,
+    #                      n.minobsinnode = 20)
+    #
+    # ctrl <- trainControl(method = 'cv',
+    #                      number = 5,
+    #                      classProbs = T,
+    #                      allowParallel = T,
+    #                      verboseIter = T)
+    #
+    # # init weights to penalize bad predictions
+    # weights <- ifelse(Y == "Y",
+    #                   (1/table(Y)[1]) * 0.5,
+    #                   (1/table(Y)[2]) * 0.5)
+    #
+    # # weighted model
+    # gbm.w <- train(x = X,
+    #                y = Y,
+    #                method = 'gbm',
+    #                weights = weights,
+    #                metric = 'Kappa',
+    #                trControl = ctrl,
+    #                tuneGrid = tgrid)
+    #
+    # # down-sampled model
+    # ctrl$sampling <- 'down'
+    # gbm.down <- train(x = X,
+    #                   y = Y,
+    #                   method = 'gbm',
+    #                   verbose = T,
+    #                   metric = 'Kappa',
+    #                   trControl = ctrl,
+    #                   tuneGrid = tgrid)
+    #
+    # # up-sampled
+    # ctrl$sampling <- 'up'
+    # gbm.up <- train(x = X,
+    #                 y = Y,
+    #                 method = 'gbm',
+    #                 verbose = T,
+    #                 metric = 'Kappa',
+    #                 trControl = ctrl,
+    #                 tuneGrid = tgrid)
+    #
+    # # w/ SMOTE
+    #   # ctrl$sampling <- 'smote'
+    #   # gbm.smote <- train(x = X,                # be sure you want to do this, time-wise
+    #   #                    y = Y,
+    #   #                    method = 'gbm',
+    #   #                    verbose = T,
+    #   #                    metric = 'ROC',
+    #   #                    trControl = ctrl)
+    #
+    # gbmlist <- list(vanilla = gbmfit,
+    #                 vanilla.roc = gbmroc,
+    #                 weighted = gbm.w,
+    #                 downsamp = gbm.down,
+    #                 upsamp = gbm.up)
+    #                 # smote = gbm.smote)
 
-# eval
-summary(gbmfit)
-print(gbmfit)
-gbm.pred <- predict(gbmfit, test.x, 'raw')
-table(gbm.pred, test.y)                       # not so good (ROC is a bad eval metric)
-postResample(gbm.pred, test.y)
 
-gbm.pp <- predict(gbmfit, test.x, 'prob')
-head(gbm.pp)
-auc <- roc(ifelse(test.y == 'Y', 1, 0), gbm.pp[,1])
-print(auc$auc)
-plot(auc)
+# adjusting the weights/sampling results in many more false+, some improvement in false-
 
-table(cut(gbm.pp[,1], breaks = 5))
-table(cut(gbm.pp[,1], breaks = 5), test.y)    # yeah, a lot of low-probability Y's
+# save off GBM results for time savings -----------------------------------
+
+# save(gbmlist, file = 'data/gbm-fitted-models-metric-kappa-.RData')
+load('data/gbm-fitted-models-metric-kappa-.RData')
+
+# GBM model comparisons ---------------------------------------------------
+
+# lapply(gbmlist, print)
+
+conf.list <- function(mod, x = test.x, y = test.y){
+  p <- predict(mod, x, 'raw')
+  confusionMatrix(p, reference = y, mode = "prec_recall", positive = "Y")
+}
+
+lapply(gbmlist, conf.list)
+
 
 
 # Fit via XGB -------------------------------------------------------------
