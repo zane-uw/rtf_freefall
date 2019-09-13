@@ -30,7 +30,6 @@ library(dbplyr)
   # sqrt(mean(((xy$qgpa - pred)^2)))
   # plot(xy$qgpa, pred)
 
-
 # canvas/instructure file ------------------------------------------------------------
 
 path.to.canvas <- "../../../../../UW_FinalGrades/"
@@ -40,7 +39,6 @@ can <- readr::read_csv(paste0(path.to.canvas, "uw-grades.csv"), col_names = T,
 
 courses.can <- readr::read_csv(paste0(path.to.canvas, "courses-provisioning_08122019.csv"))
 stu.can <- readr::read_csv(paste0(path.to.canvas, "student-provisioning_07092019.csv"))
-
 
 # sdb source data ---------------------------------------------------------
 
@@ -149,3 +147,4 @@ uw.canvas <- canvas.data.merged %>% inner_join(mrg.dat, by = c('system_key' = 's
 # save merged canvas grade file -------------------------------------------
 
 save(uw.canvas, file = 'data/merged-canvas-grade-data-with-sdb.RData')
+
