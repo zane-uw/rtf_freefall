@@ -173,3 +173,6 @@ plot.breakdown <- function(idx, breakdown.obj = pred.breakdown, source.data = w[
 plot.breakdown(6180, threshold = .5)
 plot.breakdown(20964, threshold = .5)
 plot.breakdown(17, threshold = .5)
+
+
+save(w2.mod, dat, w, explr, pred.breakdown, file = "models/xgb-canvas-week2-mod-and-explainer.RData")
