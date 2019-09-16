@@ -45,3 +45,5 @@ scratch.R
 *Icon*
 # always ignore data!
 data/
+# always ignore model outs
+models/

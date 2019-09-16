@@ -51,6 +51,9 @@ baseline.xgb <- xgb.train(param = params,
 print(baseline.xgb)
 plot(predict(baseline.xgb, baseline.dmatrix), baseline.data$target)
 
+# MAE
+mean(abs(predict(baseline.xgb, baseline.dmatrix) - w$target))
+
 # preproc <- preProcess(baseline.data)
 # ppbaseline.data <- predict(preproc, baseline.data)
 
@@ -132,12 +135,16 @@ plot.breakdown <- function(idx, breakdown.obj = pred.breakdown, source.data = w[
   i.other <- which(abs(cur) < threshold)
   other.impact <- 0
 
+  # cat("\ni.other: ", i.other)
+
   if(length(i.other > 0)) {
-    other_impact <- sum(cur[i.other])
+    other.impact <- sum(cur[i.other])
     names(other.impact) <- 'other'
     cur = cur[-i.other]
     label.data = label.data[-i.other]
   }
+  cat("\nother.impact: ", other.impact)
+
   if (abs(other.impact) > 0) {
     cur <- c(intercept, cur, other.impact)
     label.data = c("", label.data, "")
@@ -152,12 +159,12 @@ plot.breakdown <- function(idx, breakdown.obj = pred.breakdown, source.data = w[
     labels[1] <- 'intercept'
   }
 
-  # cat("\nActual: ", Y[idx])
-  # cat("\nPrediction: ", pred)
-  # cat("\nWeight: ", weight)
-  # cat("\nBreakdown")
-  # cat("\n")
-  # print(cur)
+  cat("\nActual: ", unlist(Y[idx,]))
+  cat("\nPrediction: ", pred)
+  cat("\nWeight: ", weight)
+  cat("\nBreakdown")
+  cat("\n")
+  print(cbind(cur))
 
 
   waterfalls::waterfall(values = cur,
@@ -170,6 +177,11 @@ plot.breakdown <- function(idx, breakdown.obj = pred.breakdown, source.data = w[
 
 }
 
+
 plot.breakdown(6180, threshold = .5)
 plot.breakdown(20964, threshold = .5)
 plot.breakdown(17, threshold = .5)
+
+
+save(w2.mod, dat, w, explr, pred.breakdown, file = "models/xgb-canvas-week2-mod-and-explainer.RData")
+
