@@ -37,13 +37,13 @@ uw.weekly <- uw.canvas %>% select(mean_recent_score_1:missing_count_16)
 params = list(max_depth = 9, eta = .1, nthread = 3, objective = 'reg:linear')
 
 baseline.data <- uw.weekly %>%
-  select(mean_recent_score_1:missing_count_3) %>%
+  select(mean_recent_score_1:missing_count_2) %>%
   mutate(target = XY.base$target)
 
 baseline.lm <- lm(target ~., data = baseline.data)
 summary(baseline.lm)
 
-baseline.dmatrix <- xgb.DMatrix(as.matrix(baseline.data[,-31]), label = baseline.data$target)
+baseline.dmatrix <- xgb.DMatrix(as.matrix(baseline.data[,-21]), label = baseline.data$target)
 baseline.xgb <- xgb.train(param = params,
                           baseline.dmatrix,
                           nrounds = 500,
