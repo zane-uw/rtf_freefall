@@ -34,7 +34,7 @@ uw.weekly <- uw.canvas %>% select(mean_recent_score_1:missing_count_16)
 
 # Canvas only baseline 3 week model
 
-params = list(max_depth = 9, eta = .1, nthread = 3, objective = 'reg:linear')
+params = list(max_depth = 9, eta = .1, nthread = 3, objective = 'reg:squarederror')   # 'reg:linear' deprecated. use 'reg:squarederror'
 
 baseline.data <- uw.weekly %>%
   select(mean_recent_score_1:missing_count_2) %>%
