@@ -20,7 +20,9 @@ theme_set(theme_bw(base_size = 14))
 options(tibble.print_max = 500)
 
 # parallel setup
-cl <- makeCluster((detectCores() - 1), type = "PSOCK")
+# stopCluster(cl)
+# registerDoSEQ()
+cl <- makeCluster((detectCores()/2), type = "PSOCK"); cl
 registerDoParallel(cl)
 
 
@@ -53,6 +55,25 @@ binarize.yn <- function(x){
   y[x == "N"] <- 0
   return(y)
 }
+binarize.logical <- function(x){
+  y <- rep(NA, length.out = length(x))
+  y[x == T] <- 1
+  y[x == F] <- 0
+  return(y)
+}
+
+# let's generalize those
+binarize.vals <- function(x, val0, val1){
+  y <- rep(NA, length.out = length(x))
+  y[x == val0] <- 1
+  y[x == val1] <- 0
+  return(y)
+}
+# test <- c(T, F, T, F, F, F)
+# binarize.vals(test, T, F)
+# test <- c("N", "Y", "Y", "N")
+# binarize.vals(test, "Y", "N")
+# rm(test)
 
 setwd(rstudioapi::getActiveProject())
 
@@ -92,7 +113,8 @@ dat <- mrg.dat %>%
   #        l1.cum.pts = lag(cum.pts),
   #        l1.cum.attmp = lag(cum.attmp)) %>%
   # ungroup() %>%
-  mutate(Y = factor(if_else(qgpa <= 2.5, 1, 0), levels = c(0, 1)),
+  mutate(Y = factor(if_else(qgpa <= 2.5, "y", "n"), levels = c('n', 'y')),
+         # Y = factor(if_else(qgpa <= 2.5, 1, 0), levels = c(0, 1)),
          # qgpa15 = factor(qgpa15, levels = c(0, 1)),
          probe = factor(probe, levels = c(0,1)),
          scholarship_type = factor(scholarship_type),
@@ -102,7 +124,18 @@ dat <- mrg.dat %>%
          high_sch_gpa = if_else(is.na(high_sch_gpa), -99, high_sch_gpa)) %>%
   group_by(system_key) %>%
   arrange(system_key, yrq) %>%
-  mutate(qtr = row_number()) %>%
+  # add a quarter increment, lagged vars
+  mutate(qtr = row_number(),
+         l1.qgpa = lag(qgpa, n = 1),
+         l1.cgpa = lag(cum.gpa, n = 1),
+         l1.cum.pts = lag(cum.pts, 1),
+         l1.cum.attmp = lag(cum.attmp, 1),
+         l1.tot_creds = lag(tot_creds, 1),
+         # running gpa change
+         d1 = qgpa - lag(qgpa),
+         d1 = if_else(is.na(d1), 0, d1),
+         rundiff = d1 + lag(d1)) %>%
+  select(-d1) %>%
   ungroup()
 
 # select test score
@@ -112,10 +145,31 @@ dat$std_test_high <- pmax(act[,1], sat[,1], na.rm = T)
 rm(sat, act)
 
 
+# mod.dat <- dat %>%
+#   select(Y, class.standing, tenth_day_credits, num_ind_study, num_courses, attmp, nongrd, deduct, tot_creds, s1_gender, running_start,
+#          std_test_high, starts_with("Ethnic"), HispanicInd, InternationalStudentInd, age, conditional, provisional, res_in_question,
+#          low_family_income, appl_class, high_sch_gpa, starts_with("hs"), ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary)
+
 mod.dat <- dat %>%
-  select(Y, class.standing, tenth_day_credits, num_ind_study, num_courses, attmp, nongrd, deduct, tot_creds, s1_gender, running_start,
-         std_test_high, starts_with("Ethnic"), HispanicInd, InternationalStudentInd, age, conditional, provisional, res_in_question,
-         low_family_income, appl_class, high_sch_gpa, starts_with("hs"), ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary)
+  select(system_key, Y, class.standing, tenth_day_credits, num_ind_study, num_courses, attmp, nongrd, deduct, tot_creds, honors_program,
+         std_test_high, conditional, provisional, res_in_question, low_family_income, appl_class, high_sch_gpa, starts_with("hs"),
+         ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary, qtr, starts_with('l1.'), rundiff) %>%
+  mutate_if(is.logical, binarize.logical) %>%
+  # local xform
+  group_by(system_key) %>%
+  mutate(reg.late.days = scale(reg.late.days),
+         tenth_day_credits = scale(tenth_day_credits),
+         attmp = scale(attmp)) %>%
+  ungroup() %>%
+  select(-system_key)
+
+# I would also like to keep the missing entries - mainly in quarter #1 where we have a cold start problem
+# of course, we won't know any 'truth' to impute/fill with for someone with no data. Technically that's something
+# we could also model -> impute later; for now let's not.
+mod.dat <- mod.dat %>%
+  mutate_at(vars(l1.qgpa, l1.cgpa, l1.cum.pts, l1.cum.attmp, l1.tot_creds), replace_na, replace = -99) %>%
+  mutate(rundiff = replace_na(rundiff, -99))
+
 
 # Validation checks -------------------------------------------------------
 
@@ -123,15 +177,16 @@ mod.dat <- dat %>%
 mod.dat <- mod.dat[,near0$zeroVar == F]
 
 nrow(mod.dat[complete.cases(mod.dat),]) / nrow(mod.dat)       # The change to HS and trans GPA coding is a large improvement here
-# missing.threshold <- 0.3
-# (i <- which(apply(dat, 2, function(x) sum(is.na(x)) / nrow(dat)) > missing.threshold))
-for(mt in seq(0, .3, by = .05)){
-  print(mt)
-  print(which(apply(mod.dat, 2, function(x) sum(is.na(x)) / nrow(mod.dat) > mt)))
-}
 
-# dat <- subset(dat, select = -i)
-# nrow(dat[complete.cases(dat),]) / nrow(dat)
+  # missing.threshold <- 0.3
+  # (i <- which(apply(mod.dat, 2, function(x) sum(is.na(x)) / nrow(mod.dat)) > missing.threshold))
+  # # for(mt in seq(0, .3, by = .05)){
+  # #   print(mt)
+  # #   print(which(apply(mod.dat, 2, function(x) sum(is.na(x)) / nrow(mod.dat) > mt)))
+  # # }
+  #
+  # mod.dat <- subset(mod.dat, select = -i)
+  # nrow(mod.dat[complete.cases(mod.dat),]) / nrow(mod.dat)
 
 # FOR TIME BEING:
 mod.dat <- mod.dat[complete.cases(mod.dat),]
@@ -143,32 +198,64 @@ i.train <- createDataPartition(y = mod.dat$Y, p = .75, list = F)
 training <- mod.dat[i.train,]
 testing  <- mod.dat[-i.train,]
 
-# Preprocess --------------------------------------------------------------
-
-
-# Control -------------------------------------------------------------------
+# Control opts -------------------------------------------------------------------
 
 # ctrl <- trainControl(method = "repeatedcv",
 #                      number = 10,
 #                      repeats = 3)
-ctrl <- trainControl(method = "cv", number = 5) #10)
+# ctrl <- trainControl(method = "cv", number = 5, sampling = "smote")
+# ctrl <- trainControl(method = "cv", number = 5, sampling = "down")
 
-# Fit via GLMNET ---------------------------------------------------------------
+# Fit via GLMNET; elastic lasso ---------------------------------------------------------------
+# cv to tune hyperparams
+# trying ROC for training metric rather than Acc.
+ctrl <- trainControl(method = "cv", number = 5, sampling = "down",
+                     verboseIter=TRUE, classProbs=TRUE, summaryFunction=twoClassSummary)
 
 cvfit <- train(Y ~.,
              data = training,
              method = "glmnet",
              trControl = ctrl,
+             metric = "ROC",
              # glmnet options
              family = "binomial",
-             tuneGrid = expand.grid(alpha = .5, lambda = seq(0.001, 0.1, by = 0.001)))
-
+             tuneGrid = expand.grid(alpha = seq(.1, .9, by = .1), lambda = seq(0.01, 0.3, by = 0.01)))
+getTrainPerf(cvfit)
 confusionMatrix(cvfit)
 cvfit.pr <- predict(cvfit, newdata = testing)
-confusionMatrix(cvfit.pr, reference = testing$Y, mode = "prec_recall", positive = "1")
+confusionMatrix(cvfit.pr, reference = testing$Y, positive = 'y')
 # fit$results
 cvfit$bestTune
 plot(cvfit)
+
+fitcontrol <- trainControl(method = "none")
+# rerun w/ bestTune
+glm.mod <- train(Y~.,
+                 data = training,
+                 method = "glmnet",
+                 family = "binomial",
+                 # alpha = ,
+                 # lambda = ,
+                 trControl = fitcontrol,
+                 tuneGrid = expand.grid(alpha = cvfit$bestTune$alpha,
+                                        lambda = cvfit$bestTune$lambda))
+plot(glm.mod$finalModel, xvar = "dev", label = T)
+plot(glm.mod$finalModel, label = T)
+glm.mod.pr <- predict(glm.mod, newdata = testing)
+confusionMatrix(glm.mod.pr, reference = testing$Y, positive = 'y')
+
+# varimp:
+varImp(glm.mod, scale = FALSE)
+
+glm.mod.probs <- predict(glm.mod, newdata = testing, type = 'prob')
+(cut <- quantile(glm.mod.probs$`1`, probs = .75))
+sum(glm.mod.probs$`1` >= cut)
+
+p <- ifelse(glm.mod.probs$`1` >= cut, 1, 0)
+table('.75 cut' = p, 'truth' = testing$Y)
+3411/(3411+1779)
+
+
 
 
 # Fit via GBM (caret) -----------------------------------------------------
