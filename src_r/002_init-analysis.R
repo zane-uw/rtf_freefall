@@ -22,7 +22,7 @@ options(tibble.print_max = 500)
 # parallel setup
 # stopCluster(cl)
 # registerDoSEQ()
-cl <- makeCluster((detectCores()/2), type = "PSOCK"); cl
+cl <- makeCluster((detectCores() - 1), type = "PSOCK"); cl
 registerDoParallel(cl)
 
 
@@ -209,8 +209,13 @@ testing  <- mod.dat[-i.train,]
 # Fit via GLMNET; elastic lasso ---------------------------------------------------------------
 # cv to tune hyperparams
 # trying ROC for training metric rather than Acc.
-ctrl <- trainControl(method = "cv", number = 5, sampling = "down",
-                     verboseIter=TRUE, classProbs=TRUE, summaryFunction=twoClassSummary)
+ctrl <- trainControl(method = "cv",
+                     number = 5,
+                     # sampling = 'down',
+                     classProbs = T,
+                     summaryFunction = twoClassSummary,
+                     allowParallel = T,
+                     verboseIter = T)
 
 cvfit <- train(Y ~.,
              data = training,
@@ -228,7 +233,7 @@ confusionMatrix(cvfit.pr, reference = testing$Y, positive = 'y')
 cvfit$bestTune
 plot(cvfit)
 
-fitcontrol <- trainControl(method = "none")
+fitcontrol <- trainControl(method = "none", classProbs = T)
 # rerun w/ bestTune
 glm.mod <- train(Y~.,
                  data = training,
@@ -237,10 +242,12 @@ glm.mod <- train(Y~.,
                  # alpha = ,
                  # lambda = ,
                  trControl = fitcontrol,
+                 metric = "ROC",
                  tuneGrid = expand.grid(alpha = cvfit$bestTune$alpha,
                                         lambda = cvfit$bestTune$lambda))
-plot(glm.mod$finalModel, xvar = "dev", label = T)
-plot(glm.mod$finalModel, label = T)
+
+# plot(glm.mod$finalModel, xvar = "dev", label = T)
+# plot(glm.mod$finalModel, label = T)
 glm.mod.pr <- predict(glm.mod, newdata = testing)
 confusionMatrix(glm.mod.pr, reference = testing$Y, positive = 'y')
 
@@ -248,355 +255,435 @@ confusionMatrix(glm.mod.pr, reference = testing$Y, positive = 'y')
 varImp(glm.mod, scale = FALSE)
 
 glm.mod.probs <- predict(glm.mod, newdata = testing, type = 'prob')
-(cut <- quantile(glm.mod.probs$`1`, probs = .75))
-sum(glm.mod.probs$`1` >= cut)
+(cut <- quantile(glm.mod.probs$y, probs = .75))
+sum(glm.mod.probs$y >= cut)
 
-p <- ifelse(glm.mod.probs$`1` >= cut, 1, 0)
+p <- ifelse(glm.mod.probs$y >= cut, 1, 0)
 table('.75 cut' = p, 'truth' = testing$Y)
-3411/(3411+1779)
+1988/(1988+3202)
 
 
 
+# alt outcome: GPA drop ---------------------------------------------------
 
-# Fit via GBM (caret) -----------------------------------------------------
+gpa.drop <- dat %>%
+  group_by(system_key) %>%
+  arrange(system_key, yrq) %>%
+  mutate(delta = qgpa - lag(qgpa, n = 1),
+         Y = factor(ifelse(abs(delta < 0), 'y', 'n'), levels = c('n', 'y'))) %>%
+  ungroup() %>%
+  select(Y, everything()) %>%
+  mutate_if(is.logical, binarize.logical) %>%
+  # local xform
+  group_by(system_key) %>%
+  mutate(reg.late.days = scale(reg.late.days),
+         tenth_day_credits = scale(tenth_day_credits),
+         attmp = scale(attmp)) %>%
+  ungroup() %>%
+  select(-system_key)
 
-# need to redo some data for GBM testing
-gbmdat <- rbind(testing, training)
-gbmdat$Y <- as.numeric(levels(gbmdat$Y))[gbmdat$Y]
-gbmdat$Y <- factor(gbmdat$Y, levels = c(1, 0), labels = c('Y', 'N'))
-gbmdat$s1_gender <- ifelse(gbmdat$s1_gender == "M", 0, 1)
-i <- sapply(gbmdat, is.character)
-gbmdat[,i] <- apply(gbmdat[,i], 2, binarize.yn)
-# change logicals
-(i <- sapply(gbmdat, is.logical))
-gbmdat[,i] <- apply(gbmdat[,i], 2, function(x){
-  ifelse(x == T, 1, 0)
-})
-j <- sample(1:nrow(gbmdat), replace = F, size = .7*nrow(gbmdat))
-Y <- gbmdat$Y[j]
-X <- gbmdat[j, -1]
-test.y <- gbmdat$Y[-j]
-test.x <- gbmdat[-j, -1]
+vars <- names(mod.dat)
+gpa.drop <- gpa.drop[,vars]
+gpa.drop <- subset(gpa.drop, select = -c(rundiff))
 
-    #
-    # # control setup
-    #
-    # # tgrid <- expand.grid(interaction.depth = 6,
-    # #                      n.trees = 500,
-    # #                      shrinkage = .01,
-    # #                      n.minobsinnode = 20)
-    #
-    # ctrl <- trainControl(method = 'cv',
-    #                      number = 5,
-    #                      # summaryFunction = twoClassSummary,   # for ROC
-    #                      classProbs = T,
-    #                      allowParallel = T,
-    #                      verboseIter = T)
-    #
-    # # fit
-    # gbmfit <- train(x = X,
-    #                 y = Y,
-    #                 method = 'gbm',
-    #                 trControl = ctrl,
-    #                 metric = 'Kappa',
-    #                 preProc = c("center", "scale")) # ,
-    #                 # tuneGrid = tgrid)
-    #
-    # # eval
-    # summary(gbmfit)
-    # print(gbmfit)
-    # gbm.pred <- predict(gbmfit, test.x, 'raw')
-    # table(gbm.pred, test.y)
-    # postResample(gbm.pred, test.y)
-    #
-    # gbm.pp <- predict(gbmfit, test.x, 'prob')
-    # head(gbm.pp)
-    # auc <- roc(ifelse(test.y == 'Y', 1, 0), gbm.pp[,1])
-    # print(auc$auc)
-    # plot(auc)
-    #
-    # table(cut(gbm.pp[,1], breaks = 5))
-    # table(cut(gbm.pp[,1], breaks = 5), test.y)    # lot of low-probability Y's
-    #
-    #
-    # ctrl$summaryFunction <- twoClassSummary
-    # gbmroc <- train(x = X,
-    #                 y = Y,
-    #                 method = 'gbm',
-    #                 trControl = ctrl,
-    #                 metric = 'ROC',
-    #                 preProc = c("center", "scale"))
-    # # Kappa v ROC
-    # print(gbmfit)
-    # print(gbmroc)
-    # table(gbm.pred, test.y)
-    # table(predict(gbmroc, test.x, 'raw'), test.y)
-    # # both have high false negative rates
-    #
-    # # GBM adjustments ---------------------------------------------------------
-    #
-    # # adjust for class imbalance; sampling inside training proc
-    # tgrid <- expand.grid(interaction.depth = c(5, 7, 9),
-    #                      n.trees = 500,
-    #                      shrinkage = .01,
-    #                      n.minobsinnode = 20)
-    #
-    # ctrl <- trainControl(method = 'cv',
-    #                      number = 5,
-    #                      classProbs = T,
-    #                      allowParallel = T,
-    #                      verboseIter = T)
-    #
-    # # init weights to penalize bad predictions
-    # weights <- ifelse(Y == "Y",
-    #                   (1/table(Y)[1]) * 0.5,
-    #                   (1/table(Y)[2]) * 0.5)
-    #
-    # # weighted model
-    # gbm.w <- train(x = X,
-    #                y = Y,
-    #                method = 'gbm',
-    #                weights = weights,
-    #                metric = 'Kappa',
-    #                trControl = ctrl,
-    #                tuneGrid = tgrid)
-    #
-    # # down-sampled model
-    # ctrl$sampling <- 'down'
-    # gbm.down <- train(x = X,
-    #                   y = Y,
-    #                   method = 'gbm',
-    #                   verbose = T,
-    #                   metric = 'Kappa',
-    #                   trControl = ctrl,
-    #                   tuneGrid = tgrid)
-    #
-    # # up-sampled
-    # ctrl$sampling <- 'up'
-    # gbm.up <- train(x = X,
-    #                 y = Y,
-    #                 method = 'gbm',
-    #                 verbose = T,
-    #                 metric = 'Kappa',
-    #                 trControl = ctrl,
-    #                 tuneGrid = tgrid)
-    #
-    # # w/ SMOTE
-    #   # ctrl$sampling <- 'smote'
-    #   # gbm.smote <- train(x = X,                # be sure you want to do this, time-wise
-    #   #                    y = Y,
-    #   #                    method = 'gbm',
-    #   #                    verbose = T,
-    #   #                    metric = 'ROC',
-    #   #                    trControl = ctrl)
-    #
-    # gbmlist <- list(vanilla = gbmfit,
-    #                 vanilla.roc = gbmroc,
-    #                 weighted = gbm.w,
-    #                 downsamp = gbm.down,
-    #                 upsamp = gbm.up)
-    #                 # smote = gbm.smote)
+near0 <- nearZeroVar(gpa.drop, saveMetrics = T, allowParallel = T)
+gpa.drop <- gpa.drop[,near0$zeroVar == F]
+gpa.drop <- gpa.drop[complete.cases(gpa.drop),]
 
+i.train <- createDataPartition(y = gpa.drop$Y, p = .75, list = F)
+training <- gpa.drop[i.train,]
+testing  <- gpa.drop[-i.train,]
 
-# adjusting the weights/sampling results in many more false+, some improvement in false-
+drop.ctrl <- trainControl(method = "cv",
+                          number = 5,
+                          # sampling = 'down',        # not imbalanced like the above
+                          # classProbs = T,
+                          # summaryFunction = twoClassSummary,
+                          allowParallel = T,
+                          verboseIter = T)
 
-# save off GBM results for time savings -----------------------------------
-
-# save(gbmlist, file = 'data/gbm-fitted-models-metric-kappa-.RData')
-load('data/gbm-fitted-models-metric-kappa-.RData')
-
-# GBM model comparisons ---------------------------------------------------
-
-# lapply(gbmlist, print)
-
-conf.list <- function(mod, x = test.x, y = test.y){
-  p <- predict(mod, x, 'raw')
-  confusionMatrix(p, reference = y, mode = "prec_recall", positive = "Y")
-}
-
-lapply(gbmlist, conf.list)
-
-
-
-# Fit via XGB -------------------------------------------------------------
-
-# xgb can handle missing data but caret is weird about it
-# preprocessing steps
-# dv <- dummyVars(Y ~., data = mod.dat)
-# xgb.dat <- data.frame(predict(dv, newdata = mod.dat))
-# xgb.dat$Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
-
-xgb.dat <- mod.dat[,-nearZeroVar(mod.dat)]
-# split
-i.train <- createDataPartition(y = xgb.dat$Y, p = .80, list = F)
-# i <- varwhich(dat, "Y_i")
-training <- xgb.dat[i.train,]
-# train_x <- subset(training, select = -c(Y))
-# train_y <- as.factor(training$Y)
-testing  <- xgb.dat[-i.train,]
-# test_x <- subset(testing, select = -c(Y))
-# test_y <- as.factor(testing$Y)
-
-# setup control
-xgb.ctrl <- trainControl(method = "cv",
-                     number = 3,
-                     verboseIter = F,
-                     allowParallel = T)
-
-nrounds <- 1e3
-grid_init <- expand.grid(nrounds = seq(200, nrounds, 50),
-                         eta = c(.025, .05, .1, .3),
-                         max_depth = c(2, 3, 4, 5, 6),
-                         gamma = 0,
-                         colsample_bytree = 1,
-                         min_child_weight = 1,
-                         subsample = 1)
-
-xgb.fit <- train(Y ~.,
+drop.cv <- train(Y ~.,
              data = training,
-             method = "xgbTree",
-             trControl= xgb.ctrl,
-             tuneGrid = grid_init,
-             verbose = T)
-###
-# to avoid re-running this while I update a slew of stuff:
-# save.image()
-# load(".RData")
-###
+             method = "glmnet",
+             trControl = drop.ctrl,
+             metric = "Accuracy",
+             # glmnet options
+             family = "binomial",
+             tuneGrid = expand.grid(alpha = seq(.1, .9, by = .1), lambda = seq(0.01, 0.3, by = 0.01)))
+getTrainPerf(drop.cv)
+confusionMatrix(drop.cv)
+drop.cv.pr <- predict(drop.cv, newdata = testing)
+confusionMatrix(drop.cv.pr, reference = testing$Y, positive = 'y')
+# fit$results
+drop.cv$bestTune
+plot(drop.cv)
 
-# predictions for test set
-xgb.pr <- predict(xgb.fit, newdata = testing)
-confusionMatrix(xgb.pr, testing$Y, positive = "1", mode = "everything")
-densityplot(xgb.fit, pch = "|")
+fitcontrol <- trainControl(method = "none", classProbs = T)
+# rerun w/ bestTune
+drop.mod <- train(Y~.,
+                 data = training,
+                 method = "glmnet",
+                 family = "binomial",
+                 trControl = fitcontrol,
+                 metric = "ROC",
+                 tuneGrid = expand.grid(alpha = cvfit$bestTune$alpha,
+                                        lambda = cvfit$bestTune$lambda))
 
-ep <- predict(xgb.fit, newdata = testing, type = "prob")
-par(mfrow = c(1,2))
-hist(ep[,1]); hist(ep[,2])
-par(mfrow = c(1,1))
+drop.mod.pr <- predict(drop.mod, newdata = testing)
+confusionMatrix(drop.mod.pr, reference = testing$Y, positive = 'y')
 
-# var imp plot
-col.names = names(training[,-1])
-imp = xgb.importance(col.names, xgb.fit$finalModel)
-xgb.plot.importance(imp)
-
-
-# xgb explainer -----------------------------------------------------------
-
-dv <- dummyVars(Y ~., data = xgb.dat)
-X <- data.frame(predict(dv, newdata = mod.dat))
-Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
-# split
-i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
-
-train_x <- X[i.train,]
-train_y <- Y[i.train]
-
-test_x <- X[-i.train,]
-test_y <- Y[-i.train]
-
-# cv setup
-cv <- createFolds(train_y, k = 7)
-# control
-ctrl <- trainControl(method = "cv", index = cv)
-xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
-param <- list(objective = "binary:logistic", base_score = 0.5)
-
-# fit
-xgboost.cv = xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
-# pick best, run
-best_iteration = xgboost.cv$best_iteration
-xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds=best_iteration)
-# predictions
-xgb.test.data = xgb.DMatrix(data.matrix(test_x), missing = NA)
-xgb.preds = predict(xgb.model, xgb.test.data)
-xgb.roc_obj <- roc(test_y, xgb.preds)
-cat("XGB AUC ", auc(xgb.roc_obj))
-
-# importance
-col_names = attr(xgb.train.data, ".Dimnames")[[2]]
-imp = xgb.importance(col_names, xgb.model)
-xgb.plot.importance(imp)
-
-explr = buildExplainer(xgb.model, trainingData = xgb.train.data, type = "binary", base_score = 0.5, trees_idx = NULL)
-pred.breakdown = explainPredictions(xgb.model, explr, xgb.test.data)
-
-# cat('Breakdown Complete','\n')
-weights = rowSums(pred.breakdown)
-pred.xgb = 1/(1+exp(-weights))
-cat(max(xgb.preds-pred.xgb),'\n')
-
-idx_to_get = as.integer(802)
-test_x[idx_to_get,]
-showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x) ,idx_to_get, type = "binary")
-
-# how about someone w/ a high prob?
-pr <- predict(xgb.model, xgb.test.data)
-showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "binary")
-
-pr.cut <- cut(pr, 5)
-table(pr.cut, test_y)
+# varimp
+varImp(glm.mod, scale = FALSE)
 
 
-# XGB Explainer: Y = Quarterly GPA ----------------------------------------
+# Split train/test -------------------------------------------------------------
 
-reg.dat <- dat %>%
-  select(Y = qgpa, class.standing, tenth_day_credits, num_ind_study,
-         num_courses, attmp, nongrd, deduct, tot_creds,
-         s1_gender, running_start, std_test_high, starts_with("Ethnic"), HispanicInd,
-         InternationalStudentInd, age, conditional, provisional, res_in_question,
-         low_family_income, appl_class, high_sch_gpa, starts_with("hs"),
-         ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary)
-
-dv <- dummyVars(Y ~., data = reg.dat)
-regX <- data.frame(predict(dv, newdata = reg.dat))
-regY <- reg.dat$Y
-# split
-i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
-train_x <- regX[i.train,]
-train_y <- regY[i.train]
-test_x <- regX[-i.train,]
-test_y <- regY[-i.train]
-
-# cv setup
-cv <- createFolds(train_y, k = 7)
-# control
-ctrl <- trainControl(method = "cv", index = cv)
-xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
-param <- list(objective = "reg:linear", base_score = 0.5)
-
-# fit -> select
-xgboost.cv <- xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics = "rmse")
-best_iteration <- xgboost.cv$best_iteration
-xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds = best_iteration)
-# predictions
-xgb.test.data <- xgb.DMatrix(data.matrix(test_x), missing = NA)
-xgb.preds <- predict(xgb.model, xgb.test.data)
-
-# importance
-col_names <- attr(xgb.train.data, ".Dimnames")[[2]]
-imp <- xgb.importance(col_names, xgb.model)
-xgb.plot.importance(imp)
-
-explr <- buildExplainer(xgb.model, trainingData = xgb.train.data, type = "regression", base_score = 0.5, trees_idx = NULL)
-pred.breakdown <- explainPredictions(xgb.model, explr, xgb.test.data)
-
-gpa.pred <- predict(xgb.model, xgb.test.data)
-par(mfrow = c(1,2))
-hist(gpa.pred, main = "test-predictions")
-hist(test_y, main = "test-truth")
-par(mfrow = c(1,1))
-plot(test_y, gpa.pred)
-test.resid <- test_y - gpa.pred
-hist(test.resid, main = "residuals")
-plot(test.resid, test_y)
-table(cut(test.resid, breaks = 7))
+i.train <- createDataPartition(y = mod.dat$Y, p = .75, list = F)
+# i <- varwhich(dat, "Y_i")
+training <- mod.dat[i.train,]
+testing  <- mod.dat[-i.train,]
 
 
-showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "regression")
-showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), which(gpa.pred == min(gpa.pred)), type = "regression")
-
-# var breakdown plot(s)
-plot(test_x$std_test_high, pred.breakdown$std_test_high)
+#
+# # Fit via GBM (caret) -----------------------------------------------------
+#
+# # need to redo some data for GBM testing
+# gbmdat <- rbind(testing, training)
+# gbmdat$Y <- as.numeric(levels(gbmdat$Y))[gbmdat$Y]
+# gbmdat$Y <- factor(gbmdat$Y, levels = c(1, 0), labels = c('Y', 'N'))
+# gbmdat$s1_gender <- ifelse(gbmdat$s1_gender == "M", 0, 1)
+# i <- sapply(gbmdat, is.character)
+# gbmdat[,i] <- apply(gbmdat[,i], 2, binarize.yn)
+# # change logicals
+# (i <- sapply(gbmdat, is.logical))
+# gbmdat[,i] <- apply(gbmdat[,i], 2, function(x){
+#   ifelse(x == T, 1, 0)
+# })
+# j <- sample(1:nrow(gbmdat), replace = F, size = .7*nrow(gbmdat))
+# Y <- gbmdat$Y[j]
+# X <- gbmdat[j, -1]
+# test.y <- gbmdat$Y[-j]
+# test.x <- gbmdat[-j, -1]
+#
+#     #
+#     # # control setup
+#     #
+#     # # tgrid <- expand.grid(interaction.depth = 6,
+#     # #                      n.trees = 500,
+#     # #                      shrinkage = .01,
+#     # #                      n.minobsinnode = 20)
+#     #
+#     # ctrl <- trainControl(method = 'cv',
+#     #                      number = 5,
+#     #                      # summaryFunction = twoClassSummary,   # for ROC
+#     #                      classProbs = T,
+#     #                      allowParallel = T,
+#     #                      verboseIter = T)
+#     #
+#     # # fit
+#     # gbmfit <- train(x = X,
+#     #                 y = Y,
+#     #                 method = 'gbm',
+#     #                 trControl = ctrl,
+#     #                 metric = 'Kappa',
+#     #                 preProc = c("center", "scale")) # ,
+#     #                 # tuneGrid = tgrid)
+#     #
+#     # # eval
+#     # summary(gbmfit)
+#     # print(gbmfit)
+#     # gbm.pred <- predict(gbmfit, test.x, 'raw')
+#     # table(gbm.pred, test.y)
+#     # postResample(gbm.pred, test.y)
+#     #
+#     # gbm.pp <- predict(gbmfit, test.x, 'prob')
+#     # head(gbm.pp)
+#     # auc <- roc(ifelse(test.y == 'Y', 1, 0), gbm.pp[,1])
+#     # print(auc$auc)
+#     # plot(auc)
+#     #
+#     # table(cut(gbm.pp[,1], breaks = 5))
+#     # table(cut(gbm.pp[,1], breaks = 5), test.y)    # lot of low-probability Y's
+#     #
+#     #
+#     # ctrl$summaryFunction <- twoClassSummary
+#     # gbmroc <- train(x = X,
+#     #                 y = Y,
+#     #                 method = 'gbm',
+#     #                 trControl = ctrl,
+#     #                 metric = 'ROC',
+#     #                 preProc = c("center", "scale"))
+#     # # Kappa v ROC
+#     # print(gbmfit)
+#     # print(gbmroc)
+#     # table(gbm.pred, test.y)
+#     # table(predict(gbmroc, test.x, 'raw'), test.y)
+#     # # both have high false negative rates
+#     #
+#     # # GBM adjustments ---------------------------------------------------------
+#     #
+#     # # adjust for class imbalance; sampling inside training proc
+#     # tgrid <- expand.grid(interaction.depth = c(5, 7, 9),
+#     #                      n.trees = 500,
+#     #                      shrinkage = .01,
+#     #                      n.minobsinnode = 20)
+#     #
+#     # ctrl <- trainControl(method = 'cv',
+#     #                      number = 5,
+#     #                      classProbs = T,
+#     #                      allowParallel = T,
+#     #                      verboseIter = T)
+#     #
+#     # # init weights to penalize bad predictions
+#     # weights <- ifelse(Y == "Y",
+#     #                   (1/table(Y)[1]) * 0.5,
+#     #                   (1/table(Y)[2]) * 0.5)
+#     #
+#     # # weighted model
+#     # gbm.w <- train(x = X,
+#     #                y = Y,
+#     #                method = 'gbm',
+#     #                weights = weights,
+#     #                metric = 'Kappa',
+#     #                trControl = ctrl,
+#     #                tuneGrid = tgrid)
+#     #
+#     # # down-sampled model
+#     # ctrl$sampling <- 'down'
+#     # gbm.down <- train(x = X,
+#     #                   y = Y,
+#     #                   method = 'gbm',
+#     #                   verbose = T,
+#     #                   metric = 'Kappa',
+#     #                   trControl = ctrl,
+#     #                   tuneGrid = tgrid)
+#     #
+#     # # up-sampled
+#     # ctrl$sampling <- 'up'
+#     # gbm.up <- train(x = X,
+#     #                 y = Y,
+#     #                 method = 'gbm',
+#     #                 verbose = T,
+#     #                 metric = 'Kappa',
+#     #                 trControl = ctrl,
+#     #                 tuneGrid = tgrid)
+#     #
+#     # # w/ SMOTE
+#     #   # ctrl$sampling <- 'smote'
+#     #   # gbm.smote <- train(x = X,                # be sure you want to do this, time-wise
+#     #   #                    y = Y,
+#     #   #                    method = 'gbm',
+#     #   #                    verbose = T,
+#     #   #                    metric = 'ROC',
+#     #   #                    trControl = ctrl)
+#     #
+#     # gbmlist <- list(vanilla = gbmfit,
+#     #                 vanilla.roc = gbmroc,
+#     #                 weighted = gbm.w,
+#     #                 downsamp = gbm.down,
+#     #                 upsamp = gbm.up)
+#     #                 # smote = gbm.smote)
+#
+#
+# # adjusting the weights/sampling results in many more false+, some improvement in false-
+#
+# # save off GBM results for time savings -----------------------------------
+#
+# # save(gbmlist, file = 'data/gbm-fitted-models-metric-kappa-.RData')
+# load('data/gbm-fitted-models-metric-kappa-.RData')
+#
+# # GBM model comparisons ---------------------------------------------------
+#
+# # lapply(gbmlist, print)
+#
+# conf.list <- function(mod, x = test.x, y = test.y){
+#   p <- predict(mod, x, 'raw')
+#   confusionMatrix(p, reference = y, mode = "prec_recall", positive = "Y")
+# }
+#
+# lapply(gbmlist, conf.list)
+#
+#
+#
+# # Fit via XGB -------------------------------------------------------------
+#
+# # xgb can handle missing data but caret is weird about it
+# # preprocessing steps
+# # dv <- dummyVars(Y ~., data = mod.dat)
+# # xgb.dat <- data.frame(predict(dv, newdata = mod.dat))
+# # xgb.dat$Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
+#
+# xgb.dat <- mod.dat[,-nearZeroVar(mod.dat)]
+# # split
+# i.train <- createDataPartition(y = xgb.dat$Y, p = .80, list = F)
+# # i <- varwhich(dat, "Y_i")
+# training <- xgb.dat[i.train,]
+# # train_x <- subset(training, select = -c(Y))
+# # train_y <- as.factor(training$Y)
+# testing  <- xgb.dat[-i.train,]
+# # test_x <- subset(testing, select = -c(Y))
+# # test_y <- as.factor(testing$Y)
+#
+# # setup control
+# xgb.ctrl <- trainControl(method = "cv",
+#                      number = 3,
+#                      verboseIter = F,
+#                      allowParallel = T)
+#
+# nrounds <- 1e3
+# grid_init <- expand.grid(nrounds = seq(200, nrounds, 50),
+#                          eta = c(.025, .05, .1, .3),
+#                          max_depth = c(2, 3, 4, 5, 6),
+#                          gamma = 0,
+#                          colsample_bytree = 1,
+#                          min_child_weight = 1,
+#                          subsample = 1)
+#
+# xgb.fit <- train(Y ~.,
+#              data = training,
+#              method = "xgbTree",
+#              trControl= xgb.ctrl,
+#              tuneGrid = grid_init,
+#              verbose = T)
+# ###
+# # to avoid re-running this while I update a slew of stuff:
+# # save.image()
+# # load(".RData")
+# ###
+#
+# # predictions for test set
+# xgb.pr <- predict(xgb.fit, newdata = testing)
+# confusionMatrix(xgb.pr, testing$Y, positive = "1", mode = "everything")
+# densityplot(xgb.fit, pch = "|")
+#
+# ep <- predict(xgb.fit, newdata = testing, type = "prob")
+# par(mfrow = c(1,2))
+# hist(ep[,1]); hist(ep[,2])
+# par(mfrow = c(1,1))
+#
+# # var imp plot
+# col.names = names(training[,-1])
+# imp = xgb.importance(col.names, xgb.fit$finalModel)
+# xgb.plot.importance(imp)
+#
+#
+# # xgb explainer -----------------------------------------------------------
+#
+# dv <- dummyVars(Y ~., data = xgb.dat)
+# X <- data.frame(predict(dv, newdata = mod.dat))
+# Y <- as.numeric(levels(mod.dat$Y))[mod.dat$Y]
+# # split
+# i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
+#
+# train_x <- X[i.train,]
+# train_y <- Y[i.train]
+#
+# test_x <- X[-i.train,]
+# test_y <- Y[-i.train]
+#
+# # cv setup
+# cv <- createFolds(train_y, k = 7)
+# # control
+# ctrl <- trainControl(method = "cv", index = cv)
+# xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
+# param <- list(objective = "binary:logistic", base_score = 0.5)
+#
+# # fit
+# xgboost.cv = xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
+# # pick best, run
+# best_iteration = xgboost.cv$best_iteration
+# xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds=best_iteration)
+# # predictions
+# xgb.test.data = xgb.DMatrix(data.matrix(test_x), missing = NA)
+# xgb.preds = predict(xgb.model, xgb.test.data)
+# xgb.roc_obj <- roc(test_y, xgb.preds)
+# cat("XGB AUC ", auc(xgb.roc_obj))
+#
+# # importance
+# col_names = attr(xgb.train.data, ".Dimnames")[[2]]
+# imp = xgb.importance(col_names, xgb.model)
+# xgb.plot.importance(imp)
+#
+# explr = buildExplainer(xgb.model, trainingData = xgb.train.data, type = "binary", base_score = 0.5, trees_idx = NULL)
+# pred.breakdown = explainPredictions(xgb.model, explr, xgb.test.data)
+#
+# # cat('Breakdown Complete','\n')
+# weights = rowSums(pred.breakdown)
+# pred.xgb = 1/(1+exp(-weights))
+# cat(max(xgb.preds-pred.xgb),'\n')
+#
+# idx_to_get = as.integer(802)
+# test_x[idx_to_get,]
+# showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x) ,idx_to_get, type = "binary")
+#
+# # how about someone w/ a high prob?
+# pr <- predict(xgb.model, xgb.test.data)
+# showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "binary")
+#
+# pr.cut <- cut(pr, 5)
+# table(pr.cut, test_y)
+#
+#
+# # XGB Explainer: Y = Quarterly GPA ----------------------------------------
+#
+# reg.dat <- dat %>%
+#   select(Y = qgpa, class.standing, tenth_day_credits, num_ind_study,
+#          num_courses, attmp, nongrd, deduct, tot_creds,
+#          s1_gender, running_start, std_test_high, starts_with("Ethnic"), HispanicInd,
+#          InternationalStudentInd, age, conditional, provisional, res_in_question,
+#          low_family_income, appl_class, high_sch_gpa, starts_with("hs"),
+#          ft, ft.creds.over, n.unmet, reg.late.days, reg.late.binary)
+#
+# dv <- dummyVars(Y ~., data = reg.dat)
+# regX <- data.frame(predict(dv, newdata = reg.dat))
+# regY <- reg.dat$Y
+# # split
+# i.train <- sample(1:nrow(mod.dat), size = nrow(mod.dat)*.8, replace = F)
+# train_x <- regX[i.train,]
+# train_y <- regY[i.train]
+# test_x <- regX[-i.train,]
+# test_y <- regY[-i.train]
+#
+# # cv setup
+# cv <- createFolds(train_y, k = 7)
+# # control
+# ctrl <- trainControl(method = "cv", index = cv)
+# xgb.train.data = xgb.DMatrix(data.matrix(train_x), label = train_y, missing = NA)
+# param <- list(objective = "reg:linear", base_score = 0.5)
+#
+# # fit -> select
+# xgboost.cv <- xgb.cv(param = param, data = xgb.train.data, folds = cv, nrounds = 1500, early_stopping_rounds = 100, metrics = "rmse")
+# best_iteration <- xgboost.cv$best_iteration
+# xgb.model <- xgboost(param = param,  data = xgb.train.data, nrounds = best_iteration)
+# # predictions
+# xgb.test.data <- xgb.DMatrix(data.matrix(test_x), missing = NA)
+# xgb.preds <- predict(xgb.model, xgb.test.data)
+#
+# # importance
+# col_names <- attr(xgb.train.data, ".Dimnames")[[2]]
+# imp <- xgb.importance(col_names, xgb.model)
+# xgb.plot.importance(imp)
+#
+# explr <- buildExplainer(xgb.model, trainingData = xgb.train.data, type = "regression", base_score = 0.5, trees_idx = NULL)
+# pred.breakdown <- explainPredictions(xgb.model, explr, xgb.test.data)
+#
+# gpa.pred <- predict(xgb.model, xgb.test.data)
+# par(mfrow = c(1,2))
+# hist(gpa.pred, main = "test-predictions")
+# hist(test_y, main = "test-truth")
+# par(mfrow = c(1,1))
+# plot(test_y, gpa.pred)
+# test.resid <- test_y - gpa.pred
+# hist(test.resid, main = "residuals")
+# plot(test.resid, test_y)
+# table(cut(test.resid, breaks = 7))
+#
+#
+# showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), 47, type = "regression")
+# showWaterfall(xgb.model, explr, xgb.test.data, data.matrix(test_x), which(gpa.pred == min(gpa.pred)), type = "regression")
+#
+# # var breakdown plot(s)
+# plot(test_x$std_test_high, pred.breakdown$std_test_high)
 
 
 
