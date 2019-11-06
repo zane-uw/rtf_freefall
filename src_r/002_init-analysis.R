@@ -260,8 +260,6 @@ sum(glm.mod.probs$y >= cut)
 
 p <- ifelse(glm.mod.probs$y >= cut, 1, 0)
 table('.75 cut' = p, 'truth' = testing$Y)
-1988/(1988+3202)
-
 
 
 # alt outcome: GPA drop ---------------------------------------------------
@@ -688,6 +686,8 @@ testing  <- mod.dat[-i.train,]
 
 
 # build data for python ---------------------------------------------------
+# and send it to axdd-assessment
+
 library(ssh)
 pydat <- mrg.dat[,-nearZeroVar(mrg.dat)]
 pydat <- pydat %>%
