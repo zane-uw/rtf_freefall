@@ -16,6 +16,10 @@ load("data/courses-taken.RData")
 # keys
 sk <- data.frame('system_key' = unique(courses.taken$system_key))
 
+
+# correction to credits earned v attempted in xf.trs.courses
+xf.trs.courses$course_credits_earned <- ifelse(xf.trs.courses$grade %in% c("", "00", "F", "I", "NC", "HW", "W", "W3", "W4", "W5", "W6", "W7"), 0, xf.trs.courses$course_credits) # no W2
+
 # fetch additional data --------------------------------------------
 
 cf <- config::get("sdb", file = "config.yml")
@@ -74,7 +78,8 @@ xf.trs.courses$numeric.grade <- recode(xf.trs.courses$grade,
                                        "D+" = "14",
                                        "D"  = "11",
                                        "D-" = "08",
-                                       "E"  = "00")
+                                       "E"  = "00",
+                                       "F"  = "00")
 xf.trs.courses$numeric.grade <- as.numeric(xf.trs.courses$numeric.grade) / 10
 
 # # choose a cutoff for n-students
@@ -179,16 +184,18 @@ stu.deptwise.wide <- stu.deptwise.data %>%
 
 
 
-# repeat courses (quarterly) ----------------------------------------------------------
+# repeat courses (quarterly) and W's ----------------------------------------------------------
 # count repeats in yrq
-repeat.courses <- xf.trs.courses %>%
+# sum, cumsum of W's by quarter
+rep.and.w.courses <- xf.trs.courses %>%
+  mutate(w = ifelse(grepl('W', xf.trs.courses$grade) == T, 1, 0)) %>%
   arrange(system_key, yrq) %>%
   group_by(system_key, yrq) %>%
-  summarize(rep.courses = sum(repeat_course)) %>%
+  summarize(rep.courses = sum(repeat_course),
+            n.w = sum(w)) %>%
   group_by(system_key, add = F) %>%
-  mutate(csum.rep.courses = cumsum(rep.courses))
-
-
+  mutate(csum.rep.courses = cumsum(rep.courses),
+         csum.w = cumsum(n.w))
 
 # calculate quarterly STEM, GenEd by student ------------------------------
 
@@ -196,7 +203,7 @@ repeat.courses <- xf.trs.courses %>%
 
 stu.stem <- xf.trs.courses %>%
   select(system_key, yrq, course, numeric.grade, course_credits) %>%
-  inner_join(select(.data = stem.courses, course)) %>%
+  left_join(select(.data = stem.courses, course)) %>%
   arrange(system_key, yrq) %>%
   group_by(system_key, yrq) %>%
   summarize(stem.courses = n(),
@@ -209,6 +216,11 @@ stu.stem <- xf.trs.courses %>%
          cumavg.stem = cumsum(sgrade) / csum.stem.courses) %>%
   select(-sgrade)
 
+# Should NA -> 0?
+# stu.stem$avg.stem.grade <- ifelse(is.nan(stu.stem$avg.stem.grade), 0, stu.stem$avg.stem.grade)
+
+ggplot(stu.stem, aes(x = avg.stem.grade)) + geom_histogram(binwidth = .1)
+ggplot(stu.stem, aes(x = cumavg.stem)) + geom_histogram(binwidth = .1)
 
 # FE: scaling -------------------------------------------------------------
 
