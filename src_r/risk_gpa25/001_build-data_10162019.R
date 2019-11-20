@@ -76,8 +76,8 @@ stem.courses <- tbl(con, in_schema("EDWPresentation.sec", "dmSCH_dimCurriculumCo
 #
 
 # course tags (qsr, vlpa, etc)
-sched <- tbl(con, in_schema("sec", "time_schedule")) %>% # filter(dept_abbrev == "SISLA", course_no == 355) %>% collect()
-  filter(ts_year >= 2008) %>%
+sched <- tbl(con, in_schema("sec", "time_schedule")) %>% # filter(dept_abbrev == "SISLA ", course_no == 355, ts_quarter == 2) %>% collect(); View(sched)
+  filter(ts_year >= 2006) %>%
   select(ts_year, ts_quarter, course_branch, dept_abbrev, course_no, section_id, sln, current_enroll, parent_sln, current_enroll, writing_crs, diversity_crs, english_comp, qsr, vis_lit_perf_arts,
          indiv_society, natural_world, gen_elective, fee_amount) %>%
   collect() %>%
@@ -248,11 +248,26 @@ stu.stem <- xf.trs.courses %>%
 
 
 
-# create avg course size and calc the writing/divers/qsr/etc --------------
+# create fees, avg course size, and calc the writing/divers/qsr/etc --------------
 
 stu.reqs <- xf.trs.courses %>%
   select(system_key, yrq, course, section_id, numeric.grade) %>%
   left_join(sched, by = c('course' = 'course', 'yrq' = 'yrq', 'section_id' = 'section_id'))
+
+
+size.fees.reqs <- stu.reqs %>%
+  group_by(system_key, yrq) %>%
+  summarize(avg.class.size = mean(current_enroll, na.rm = T),
+            n.writing = sum(writing_crs, na.rm = T),
+            n.diversity = sum(diversity_crs, na.rm = T),
+            n.engl_comp = sum(english_comp, na.rm = T),
+            n.qsr = sum(qsr, na.rm = T),
+            n.vlpa = sum(vis_lit_perf_arts, na.rm = T),
+            n.indiv_soc = sum(indiv_society, na.rm = T),
+            n.nat_world = sum(natural_world, na.rm = T),
+            n.gen_elective = sum(gen_elective, na.rm = T),
+            sum.fees = sum(fee_amount, na.rm = T)) %>%
+  ungroup()
 
 
 # pre-major and courses in major --------------------------------------------------------
@@ -312,6 +327,14 @@ holds <- tbl(con, in_schema("sec", "student_1_hold_information")) %>%
   group_by(system_key, yrq) %>%
   summarize(n.holds = n()) %>%
   ungroup()
+holds$yrq <- as.numeric(holds$yrq)
+
+
+
+# combine -----------------------------------------------------------------
+
+
+
 
 # FE: scaling -------------------------------------------------------------
 
