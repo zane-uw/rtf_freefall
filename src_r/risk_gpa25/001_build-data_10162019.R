@@ -47,6 +47,14 @@ tran.courses.taken <- tbl(con, in_schema('sec', 'transcript_courses_taken')) %>%
 xf.trs.courses <- xf.trs.courses %>% inner_join(tran.courses.taken)
 
 
+# grab transcript for quarterly EOP code
+spec.program <- tbl(con, in_schema('sec', 'transcript')) %>%
+  inner_join(syskeys) %>%
+  select(system_key, tran_yr, tran_qtr, special_program) %>%
+  collect() %>%
+  mutate(yrq = (tran_yr*10) + tran_qtr,
+         eop = ifelse(special_program %in% c(1, 2, 3, 13, 14, 16, 17, 31, 32, 33), 1, 0))
+
 # course CIP/STEM indicator
 # A course is counted as a "Science, Technology,
 # Engineering, and Mathematics (STEM) Course" if it belongs to a Curriculum that
@@ -330,8 +338,43 @@ holds <- tbl(con, in_schema("sec", "student_1_hold_information")) %>%
 holds$yrq <- as.numeric(holds$yrq)
 
 
+# various tests -----------------------------------------------------------
+
+
+trange <- tbl(con, in_schema("sec", "sys_tbl_42_test_range")) %>% select(table_key, test_descrip, test_min_score, test_max_score) %>% collect() %>%
+  mutate_if(is.character, trimws)
+tsrc <- tbl(con, in_schema("sec", "sys_tbl_80_test_source")) %>% select(test_source = table_key, test_src_descrip) %>% collect() %>%
+  mutate(test_source = as.numeric(test_source)) %>%
+  mutate_if(is.character, trimws)
+tscore <- tbl(con, in_schema("sec", "sr_test_scores")) %>% filter(test_dt >= '2008-01-01') %>% inner_join(syskeys) %>% collect() %>%
+  mutate_if(is.character, trimws)
+# table(tscore$test_type %in% trange$table_key)
+tests <- tscore %>% inner_join(tsrc) %>% inner_join(trange, by = c('test_type' = 'table_key'))
+rm(tscore, trange, tsrc)
+
+# incompletes -------------------------------------------------------------
+
+## Only turned up 86 total so I'm not using these right now
+
+# incompletes <- tbl(con, in_schema('sec', 'student_2_incomplete_info')) %>%
+#   inner_join(syskeys) %>%
+#   group_by(system_key, received_yr, received_qtr) %>%
+#   summarize(n.incomp = n()) %>%
+#   group_by(system_key, add = F) %>%
+#   arrange(system_key, received_yr, received_qtr) %>%
+#   mutate(csum.incomp = cumsum(n.incomp)) %>%
+#   ungroup() %>%
+#   collect() %>%
+#   mutate(yrq = (received_yr*10) + received_qtr) %>%
+#   select(-received_yr, -received_qtr)
+
+# other application data previously unused --------------------------------
+
+appl <- tbl(con, in_schema('sec', 'sr_adm_appl'))
 
 # combine -----------------------------------------------------------------
+
+# Let's make __ the baseline
 
 
 
