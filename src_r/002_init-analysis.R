@@ -65,8 +65,8 @@ binarize.logical <- function(x){
 # let's generalize those
 binarize.vals <- function(x, val0, val1){
   y <- rep(NA, length.out = length(x))
-  y[x == val0] <- 1
-  y[x == val1] <- 0
+  y[x == val0] <- 0
+  y[x == val1] <- 1
   return(y)
 }
 # test <- c(T, F, T, F, F, F)

@@ -370,21 +370,54 @@ rm(tscore, trange, tsrc)
 
 # other application data previously unused --------------------------------
 
-appl <- tbl(con, in_schema('sec', 'sr_adm_appl'))
+# [TODO]
+
+  # appl <- tbl(con, in_schema('sec', 'sr_adm_appl')) %>%
+  #   inner_join(syskeys) %>%
+  #   select(system_key, rank_grid_num; adm_rec_calc; acad_sub_calc; pqa_sub_calc; rank_sup_overall; rank_acad_overall; ai_high_sch)
 
 # combine -----------------------------------------------------------------
 
-# Let's make __ the baseline
+# Let's continue with mrg.dat as the baseline
+
+dat <- mrg.dat %>%
+  # major classes
+  left_join(big.tb) %>%
+  # qtrly holds
+  left_join(holds) %>%
+  mutate(n.holds = replace_na(n.holds, 0)) %>%
+  # major dummy vars
+  left_join(maj.w) %>%
+  select(-maj_1, -maj_2, -maj_3, -majors) %>%
+  # w/draws and alternate grading
+  left_join(rep.w.alt.grading) %>%
+  # fees and gen reqs + stem
+  left_join(size.fees.reqs) %>%
+  left_join(stu.stem)
+  # not sure if we should use the wide dept data right now
 
 
+# FE: scaling, recoding, etc -------------------------------------------------------------
+skimr::skim(dat)
+binarize.logical <- function(x){
+  y <- rep(NA, length.out = length(x))
+  y[x == T] <- 1
+  y[x == F] <- 0
+  return(y)
+}
+dat.scaled <- dat %>%
+  # gen numeric (std) quarter number:
+  group_by(system_key) %>%
+  arrange(system_key, yrq) %>%
+  mutate(qtr.seq = row_number()) %>%
+  ungroup() %>%
+  mutate(running_start = ifelse(running_start == 'Y', 1, 0),
+         InternationalStudentInd = ifelse(InternationalStudentInd == 'Y', 1, 0)) %>%
+  mutate_if(is.logical, binarize.logical) %>%
+  mutate_at(c('reg.late.days', 'avg.class.size', 'sum.fees', 's1_high_satv', 's1_high_satm', 's1_high_act', 'cum.pts', 'cum.attmp',
+              'pts'), scale)
 
 
-# FE: scaling -------------------------------------------------------------
+# save --------------------------------------------------------------------
 
-
-
-
-
-
-
-
+save(dat, dat.scaled, stu.deptwise.wide, file = 'src_r/risk_gpa25/data/updated-gpa25-data.RData')
