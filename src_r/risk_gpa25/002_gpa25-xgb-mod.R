@@ -8,7 +8,6 @@ rm(list = ls())
 gc()
 
 library(caret)
-library(package)
 library(xgboostExplainer)
 library(tidyverse)
 library(pROC)
@@ -17,7 +16,7 @@ library(xgboost)
 
 set.seed(24601)
 theme_set(theme_bw(base_size = 14))
-options(tibble.print_max = 500)
+options(tibble.print_max = 200)
 
 # parallel setup
 # stopCluster(cl)
@@ -52,8 +51,14 @@ dat.scaled <- dat.scaled %>% filter(!is.na(qgpa))
 
 # encode dummies/factors
 # using dat.scaled
-cat.vars <- Cs(class, scholarship_type, child_of_alum, running_start, s1_gender, conditional, with_distinction,
-               low_family_income, appl_class, last_school_type, major.change, ft, premajor)
+# There's one var that needs both a lag and re-encoding
+dat.scaled <- dat.scaled %>%
+  group_by(system_key) %>%
+  arrange(system_key, yrq) %>%
+  mutate(scholarship_type = lag(scholarship_type))
+
+cat.vars <- Cs(class, child_of_alum, running_start, s1_gender, conditional, with_distinction,
+               low_family_income, appl_class, last_school_type, major.change, ft, premajor, scholarship_type)
 f <- paste('~', paste(cat.vars, collapse = '+'))
 encoder <- dummyVars(as.formula(f), dat.scaled)
 cat.var.mat <- dat.scaled %>%
@@ -63,7 +68,7 @@ cat.var.mat <- dat.scaled %>%
 dim(cat.var.mat)
 colnames(cat.var.mat)
 
-mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, scholarship_type, num_courses,
+mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, num_courses,
                attmp, nongrd, tot_creds, child_of_alum, running_start, s1_high_satv, s1_high_satm, s1_high_act, trans_gpa,
                conditional, with_distinction, low_family_income,
                appl_class, high_sch_gpa, hs_for_lang_type, hs_for_lang_yrs, hs_yrs_for_lang, hs_math_level, hs_yrs_math,

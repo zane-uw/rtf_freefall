@@ -7,6 +7,7 @@
 rm(list = ls())
 gc()
 
+library(caret)
 library(xgboostExplainer)
 library(tidyverse)
 library(pROC)
@@ -51,8 +52,15 @@ dat.scaled <- dat.scaled %>% filter(!is.na(qgpa))
 
 # encode dummies/factors
 # using dat.scaled
-cat.vars <- Cs(class, scholarship_type, child_of_alum, running_start, s1_gender, conditional, with_distinction,
-               low_family_income, appl_class, last_school_type, major.change, ft, premajor)
+dat.scaled <- dat.scaled %>%
+  group_by(system_key) %>%
+  arrange(system_key, yrq) %>%
+  mutate(scholarship_type = lag(scholarship_type)) %>%
+  ungroup()
+
+cat.vars <- Cs(class, child_of_alum, running_start, s1_gender, conditional, with_distinction,
+               low_family_income, appl_class, last_school_type, major.change, ft, premajor, scholarship_type)
+
 f <- paste('~', paste(cat.vars, collapse = '+'))
 encoder <- dummyVars(as.formula(f), dat.scaled)
 cat.var.mat <- dat.scaled %>%
@@ -62,7 +70,7 @@ cat.var.mat <- dat.scaled %>%
 dim(cat.var.mat)
 colnames(cat.var.mat)
 
-mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, scholarship_type, num_courses,
+mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, num_courses,
                attmp, nongrd, tot_creds, child_of_alum, running_start, s1_high_satv, s1_high_satm, s1_high_act, trans_gpa,
                conditional, with_distinction, low_family_income,
                appl_class, high_sch_gpa, hs_for_lang_type, hs_for_lang_yrs, hs_yrs_for_lang, hs_math_level, hs_yrs_math,
@@ -73,7 +81,7 @@ mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, scholarshi
 
 mod.vars <- setdiff(mod.vars, cat.vars)
 
-lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20, n.w, csum.w, avg.stem.grade)
+lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20, n.w, csum.w, avg.stem.grade, scholarship_type)
 
 mod.dat <- dat.scaled %>%
   # filter(!is.na(qgpa)) %>%
@@ -101,11 +109,15 @@ rm(f, encoder, cat.vars, mod.vars, lag.vars, cat.var.mat)
 
 # examine Y ---------------------------------------------------------------
 
-ggplot(mod.dat, aes(x = Y)) + geom_histogram(bins = 50)
+ggplot(mod.dat, aes(x = Y)) + geom_histogram(bins = 50) + geom_vline(xintercept = 2.5)
 ggplot(mod.dat, aes(x = qgpa, y = Y)) + geom_point() + stat_smooth()
 any(is.na(mod.dat$Y))
+
+sum((mod.dat$Y <= 2.5))/nrow(mod.dat)
+
 cormat <- round(cor(mod.dat, use = 'pairwise.complete.obs'), 2)
-cbind(sort(cormat[,1]))
+cbind(tail(sort(cormat[,1]), n = 10))
+cbind(head(sort(cormat[,1]), n = 10))
 
 rm(cormat)
 
@@ -121,46 +133,53 @@ dtest <- xgb.DMatrix(as.matrix(testing[,-1]), label = testing$Y)
 
 xgb.params<- list(
   objective = "reg:squarederror",
-  eta = 0.01,
+  eta = 0.05,
   max_depth = 6,
   gamma = 1,
   subsample = .8,
   colsample_bytree = .75,
-  num_parallel_tree = 2,
+  # num_parallel_tree = 2,
   eval_metric = 'rmse',
   eval_metric = 'mae')
 
 # cross-validation
 xgbcv <- xgb.cv(params = xgb.params,
                 data = dtrain,
-                nrounds = 300,
+                nrounds = 500,
                 nfold = 5,
-                prediction = TRUE,
-                showsd = TRUE,
-                stratified = TRUE,
+                prediction = T,
+                # save_models = T,
+                showsd = T,
+                stratified = T,
                 verbose = 2,
                 print_every_n = 1,
                 early_stopping_rounds = 10)
 
 print(xgbcv, verbose = T)
-
 # some analysis:
+plot(xgbcv$evaluation_log$iter, xgbcv$evaluation_log$train_rmse_mean, col = 'blue', type = 'l'); title(main = 'RMSE')
+lines(xgbcv$evaluation_log$iter, xgbcv$evaluation_log$test_rmse_mean, col = 'red')
+plot(xgbcv$evaluation_log$iter, xgbcv$evaluation_log$train_mae_mean, col = 'blue', type = 'l'); title(main = 'MAE')
+lines(xgbcv$evaluation_log$iter, xgbcv$evaluation_log$test_mae_mean, col = 'red')
 hist(xgbcv$pred)
-plot(xgbcv$pred, training$Y)
+plot(xgbcv$pred, training$Y, main = 'actual / predicted')
 abline(lm(training$Y ~ xgbcv$pred), col = 'red')
 abline(h = 2.5, col = 'green')
 abline(v = 2.5, col = 'green')
 resid <- training$Y - xgbcv$pred
 plot(density(resid))
+abline(v = 0)
 plot(resid, training$Y)
 abline(h = 2.5, col = 'green')
+abline(h = mean(training$Y), col = 'darkblue')
+qqline(resid)
 
-# fit:
+# re-fit w/ best_nrounds:
 xgb.fit <- xgboost(data = dtrain,
                    params = xgb.params,
                    nrounds = xgbcv$best_iteration,
                    verbose = TRUE,
-                   print_every_n = 1,
+                   print_every_n = 20,
                    early_stopping_rounds = 10)
 
 # summary:
@@ -168,3 +187,28 @@ print(xgb.fit, verbose = T)
 
 # predictions:
 xgb.pred <- predict(xgb.fit, dtest)
+hist(xgb.pred)
+plot(xgb.pred, testing$Y)
+abline(v = 2.5, col = 'green')
+abline(h = 2.5, col = 'green')
+
+resid <- testing$Y - xgb.pred
+hist(resid)
+plot(resid, testing$Y)
+
+imp.mat <- xgb.importance(model = xgb.fit)
+# print(importance_matrix)
+xgb.plot.importance(importance_matrix = imp.mat[1:20,])
+
+xgb.plot.deepness(xgb.fit)
+xgb.plot.shap(data = as.matrix(testing[,-1]), model = xgb.fit, top_n = 3)
+
+# save dmats --------------------------------------------------------------
+
+xgb.DMatrix.save(dtrain, 'data/xgb-gpa-train.dmatrix')
+xgb.DMatrix.save(dtest, 'data/xgb-gpa-dtest.dmatrix')
+
+
+# save fitted model -------------------------------------------------------
+
+xgb.save(xgb.fit, fname = 'models/xgb-gpa-fit.model')
