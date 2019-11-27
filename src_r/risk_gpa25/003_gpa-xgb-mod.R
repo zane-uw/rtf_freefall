@@ -1,14 +1,12 @@
 # Comments ----------------------------------------------------------------
 
-# For this file, focus on predicting quarterly GPA <= 2.5 (binary)
+# For this file, predict GPA
 
 # Setup -------------------------------------------------------------------
 
 rm(list = ls())
 gc()
 
-library(caret)
-library(package)
 library(xgboostExplainer)
 library(tidyverse)
 library(pROC)
@@ -17,14 +15,13 @@ library(xgboost)
 
 set.seed(24601)
 theme_set(theme_bw(base_size = 14))
-options(tibble.print_max = 500)
+options(tibble.print_max = 200)
 
 # parallel setup
 # stopCluster(cl)
 # registerDoSEQ()
 cl <- makeCluster((detectCores() - 1), type = "PSOCK"); cl
 registerDoParallel(cl)
-
 
 #' Add quotes to an unquoted list of characters
 #'
@@ -43,6 +40,8 @@ varwhich <- function(df, x){ return( which(names(df) == x) ) }
 setwd(rstudioapi::getActiveProject())
 
 load("src_r/risk_gpa25/data/updated-gpa25-data.RData")
+# don't need these, just tidying up
+rm(dat, stu.deptwise.wide)
 
 # Initial processing ----------------------------------------------------------
 
@@ -79,7 +78,7 @@ lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20,
 mod.dat <- dat.scaled %>%
   # filter(!is.na(qgpa)) %>%
   # target should be numeric for XGBoost
-  mutate(Y = if_else(qgpa <= 2.5, 1, 0)) %>%
+  mutate(Y = qgpa) %>%
   group_by(system_key) %>%
   arrange(system_key, yrq) %>%
   # gen lags
@@ -92,13 +91,23 @@ mod.dat <- dat.scaled %>%
   ungroup() %>%
   select(one_of(mod.vars), one_of(lag.vars))
 
-
 mod.dat <- bind_cols(mod.dat, data.frame(cat.var.mat))
 mod.key.vars <- mod.dat %>% select(system_key, yrq)
 mod.dat <- mod.dat %>%
   select(-system_key, -yrq)
 
 rm(f, encoder, cat.vars, mod.vars, lag.vars, cat.var.mat)
+
+
+# examine Y ---------------------------------------------------------------
+
+ggplot(mod.dat, aes(x = Y)) + geom_histogram(bins = 50)
+ggplot(mod.dat, aes(x = qgpa, y = Y)) + geom_point() + stat_smooth()
+any(is.na(mod.dat$Y))
+cormat <- round(cor(mod.dat, use = 'pairwise.complete.obs'), 2)
+cbind(sort(cormat[,1]))
+
+rm(cormat)
 
 # XGB model setup ---------------------------------------------------------
 
@@ -110,21 +119,21 @@ testing  <- mod.dat[-i.train,]
 dtrain <- xgb.DMatrix(as.matrix(training[,-1]), label = training$Y)
 dtest <- xgb.DMatrix(as.matrix(testing[,-1]), label = testing$Y)
 
-# wt <- sum(training$Y == 0) / sum(training$Y == 1)
 xgb.params<- list(
-  objective = "binary:logistic",
-  eta = 0.05,
-  max_depth = 8,
-  subsample = .5,
-  num_parallel_tree = 6,
-  max_delta_step = 1,
-  # scale_pos_weight = wt,
-  eval_metric = "aucpr")
+  objective = "reg:squarederror",
+  eta = 0.01,
+  max_depth = 6,
+  gamma = 1,
+  subsample = .8,
+  colsample_bytree = .75,
+  num_parallel_tree = 2,
+  eval_metric = 'rmse',
+  eval_metric = 'mae')
 
-# cross-validate xgboost to get the accurate measure of error
+# cross-validation
 xgbcv <- xgb.cv(params = xgb.params,
                 data = dtrain,
-                nrounds = 500,
+                nrounds = 300,
                 nfold = 5,
                 prediction = TRUE,
                 showsd = TRUE,
@@ -133,14 +142,18 @@ xgbcv <- xgb.cv(params = xgb.params,
                 print_every_n = 1,
                 early_stopping_rounds = 10)
 
-# best iteration:
-hist(xgbcv$pred)
-mean(as.numeric(xgbcv$pred > .5) != training$Y)
 print(xgbcv, verbose = T)
 
-# plot the AUC for the training and testing samples
-plot(x = xgbcv$evaluation_log$iter, y = xgbcv$evaluation_log$train_aucpr_mean, type = 'l', col = 'blue')
-lines(x = xgbcv$evaluation_log$iter, y = xgbcv$evaluation_log$test_aucpr_mean, col = 'red')
+# some analysis:
+hist(xgbcv$pred)
+plot(xgbcv$pred, training$Y)
+abline(lm(training$Y ~ xgbcv$pred), col = 'red')
+abline(h = 2.5, col = 'green')
+abline(v = 2.5, col = 'green')
+resid <- training$Y - xgbcv$pred
+plot(density(resid))
+plot(resid, training$Y)
+abline(h = 2.5, col = 'green')
 
 # fit:
 xgb.fit <- xgboost(data = dtrain,
@@ -150,76 +163,8 @@ xgb.fit <- xgboost(data = dtrain,
                    print_every_n = 1,
                    early_stopping_rounds = 10)
 
+# summary:
+print(xgb.fit, verbose = T)
+
 # predictions:
 xgb.pred <- predict(xgb.fit, dtest)
-# error
-# mean(as.numeric(xgb.pred > 0.5) != testing$Y)
-for(i in seq(.25, .6, by = .05)){
-  print(paste0('i: ', i, ' err: ', round(mean(as.numeric(xgb.pred > i) != testing$Y), 2)))
-}
-
-# confusion matrix (caret)
-p <- ifelse(xgb.pred >= .5, 1, 0)
-confusionMatrix(factor(p), factor(testing$Y), positive = '1', mode = 'everything')  # aucpr is an improvement
-p <- ifelse(xgb.pred >= .3, 1, 0)
-confusionMatrix(factor(p), factor(testing$Y), positive = '1', mode = 'everything')  # aucpr is an improvement
-# large increase in false+ there
-
-# importance
-imp.mat <- xgb.importance(model = xgb.fit)
-# print(imp.mat)
-xgb.plot.importance(importance_matrix = imp.mat[1:15])
-
-# Compare cuts instead of .5 cutoff
-pqt <- cut(xgb.pred, 5)
-table(pqt)
-table(pqt, testing$Y)
-
-ggplot(data = data.frame('p' = xgb.pred, 'Y' = testing$Y), aes(x = xgb.pred)) +
-  geom_histogram() +
-  facet_grid(rows = vars(Y))
-
-# What's going on in the bottom-left?
-# x <- testing[xgb.pred >= .797 & testing$Y == 0,]
-# skim(x)
-
-
-# save off xgb objects ----------------------------------------------------
-
-xgb.save(xgb.fit, fname = 'models/xgb-gpa25-fit.model')
-xgb.DMatrix.save(dtest, fname = 'data/xgb-gpa25-test.dmatrix')
-xgb.DMatrix.save(dtrain, fname = 'data/xgb-gpa25-train.dmatrix')
-
-# caret-ized
-# # setup control
-# xgb.ctrl <- trainControl(method = "cv",
-#                          number = 5,
-#                          verboseIter = T,
-#                          returnResamp = "all",
-#                          classProbs = TRUE,
-#                          summaryFunction = twoClassSummary,
-#                          allowParallel = T)
-#
-# nrounds <- 1e3
-# grid_init <- expand.grid(nrounds = nrounds, # nrounds = seq(500, nrounds, 500),
-#                          eta = c(.001, .01, .025, .05, .1),
-#                          max_depth = c(2, 4, 6, 8, 10),
-#                          gamma = c(0, 1),
-#                          colsample_bytree = 1,
-#                          min_child_weight = 1,
-#                          subsample = 1)
-#
-# xgb.train <- train(Y ~.,
-#                    data = training,
-#                    method = "xgbTree",
-#                    trControl= xgb.ctrl,
-#                    tuneGrid = grid_init,
-#                    verbose = T,
-#                    early.stop.round = 20, na.action = na.pass)
-#
-# # plot of the AUC against max_depth and eta
-# ggplot(xgb_train_1$results, aes(x = as.factor(eta), y = max_depth, size = ROC, color = ROC)) +
-#   geom_point() +
-#   theme_bw() +
-#   scale_size_continuous(guide = "none")
-
