@@ -196,12 +196,12 @@ resid <- testing$Y - xgb.pred
 hist(resid)
 plot(resid, testing$Y)
 
-imp.mat <- xgb.importance(model = xgb.fit)
+imp.mat <- xgb.importance(model = xgb.fit, feature_names = names(training)[-1])
 # print(importance_matrix)
-xgb.plot.importance(importance_matrix = imp.mat[1:20,])
+xgb.plot.importance(importance_matrix = imp.mat, top_n = 15)
 
 xgb.plot.deepness(xgb.fit)
-xgb.plot.shap(data = as.matrix(testing[,-1]), model = xgb.fit, top_n = 3)
+xgb.plot.shap(data = as.matrix(testing[,-1]), model = xgb.fit, top_n = 5)
 
 # save dmats --------------------------------------------------------------
 
