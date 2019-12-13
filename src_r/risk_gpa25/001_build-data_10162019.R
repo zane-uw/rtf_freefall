@@ -397,6 +397,18 @@ dat <- mrg.dat %>%
   # not sure if we should use the wide dept data right now
 
 
+
+# compass -----------------------------------------------------------------
+
+load('src_r/risk_gpa25/data/compass-features.RData')
+
+dat <- dat %>% left_join(compass.feats, by = c('system_key' = 'system_key', 'yrq' = 'yrq')) %>%
+  left_join(compass.weekly)
+# Note there is a lot of loss between these. I don't know why students who appear in compass would not appear in the EOP data I pulled. Some could be
+# accounted for by 20193/4 but not all.
+
+dat[,95:ncol(dat)] <- apply(dat[,95:ncol(dat)], 2, function(x) replace_na(x, 0))
+
 # FE: scaling, recoding, etc -------------------------------------------------------------
 skimr::skim(dat)
 binarize.logical <- function(x){
@@ -416,7 +428,6 @@ dat.scaled <- dat %>%
   mutate_if(is.logical, binarize.logical) %>%
   mutate_at(c('reg.late.days', 'avg.class.size', 'sum.fees', 's1_high_satv', 's1_high_satm', 's1_high_act', 'cum.pts', 'cum.attmp',
               'pts'), scale)
-
 
 # save --------------------------------------------------------------------
 

@@ -123,10 +123,13 @@ cbind(apply(adv[,8:28], 2, function(x) round(mean(x, na.rm = T), 3)))
 
 # aggregate ---------------------------------------------------------------
 
+# create weekly data?
+
 adv.agg <- adv %>%
   group_by(student_no, yr, qtr.num) %>%
   summarize_at(vars(AddDropclass:NoShow), sum, na.rm = T) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(visit_advising = 1)
 ic.activity.agg <- ic %>%
   group_by(student_no, yr, qtr.num, Contact_Type) %>%
   summarize(n = n()) %>%
@@ -144,7 +147,39 @@ n <- str_clean(names(ic.activity.agg[4:ncol(ic.activity.agg)]))
 # n <- str_remove_all(n, '[[:punct:]]')
 # n <- c(names(ic.activity.agg[1:3]), n)
 names(ic.activity.agg) <- c(names(ic.activity.agg[1:3]), n)
+ic.activity.agg$visit_ic <- 1
 
+# by weeks:
+# NA weeks will be 99? Probably they should be the next year/qtr and get a 0
+next.yrq <- function(x){
+  x <- x + ifelse(x %% 10 == 4, 7, 1)
+  return(x)
+}
+
+# [TODO] fix the yrq sequencing for the above data as well
+
+adv.wk <- adv %>%
+  filter(NoShow == 0) %>%
+  rename(yrq = AcademicQtrKeyId, week = AcademicQtrWeekNum) %>%
+  # mutate(visit_advising = 1) %>%
+  group_by(student_no, yrq, week) %>%
+  # summarize(visit_advising = sum(visit_advising)) %>%
+  summarize(visit_advising = n()) %>%
+  ungroup() %>%
+  mutate(week = replace_na(week, 0),
+         yrq = if_else(week == 0, next.yrq(yrq), yrq)) %>%
+  pivot_wider(., names_from = 'week', values_from = 'visit_advising', names_prefix = 'advising_week_')
+adv.wk[,3:ncol(adv.wk)] <- apply(adv.wk[,3:ncol(adv.wk)], 2, function(x) replace_na(x, 0))
+
+ic.wk <- ic %>%
+  rename(yrq = AcademicQtrKeyId, week = AcademicQtrWeekNum) %>%
+  group_by(student_no, yrq, week) %>%
+  summarize(visit_ic = n()) %>%
+  ungroup() %>%
+  mutate(week = replace_na(week, 0),
+         yrq = if_else(week == 0, next.yrq(yrq), yrq)) %>%
+  pivot_wider(., names_from = 'week', values_from = 'visit_ic', names_prefix = 'ic_week_')
+ic.wk[,3:ncol(ic.wk)] <- apply(ic.wk[,3:ncol(ic.wk)], 2, function(x) replace_na(x, 0))
 
 
 # add system_key; combine ----------------------------------------------------------
@@ -156,4 +191,9 @@ compass.feats <- full_join(adv.agg, ic.activity.agg) %>%
   inner_join(sid) %>%
   select(-student_no)
 
-save(compass.feats, file = 'src_r/risk_gpa25/data/compass-features.RData')
+compass.weekly <- full_join(adv.wk, ic.wk) %>%
+  filter(student_no > 1) %>%
+  inner_join(sid) %>%
+  select(-student_no)
+
+save(compass.feats, compass.weekly, file = 'src_r/risk_gpa25/data/compass-features.RData')
