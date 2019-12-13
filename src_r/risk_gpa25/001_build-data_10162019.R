@@ -429,6 +429,13 @@ dat.scaled <- dat %>%
   mutate_at(c('reg.late.days', 'avg.class.size', 'sum.fees', 's1_high_satv', 's1_high_satm', 's1_high_act', 'cum.pts', 'cum.attmp',
               'pts'), scale)
 
+# generate an alternate y variable ----------------------------------------
+
+y_any_grade <- xf.trs.courses %>%
+  mutate(g = if_else(grade <= 2.5, 1, 0)) %>%
+  group_by(system_key, yrq) %>%
+  summarize(y_any = if_else(sum(g, na.rm = T) >= 1, 1, 0))
+
 # save --------------------------------------------------------------------
 
-save(dat, dat.scaled, stu.deptwise.wide, file = 'src_r/risk_gpa25/data/updated-gpa25-data.RData')
+save(dat, dat.scaled, stu.deptwise.wide, y_any_grade, file = 'src_r/risk_gpa25/data/updated-gpa25-data.RData')
