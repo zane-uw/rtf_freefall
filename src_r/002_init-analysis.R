@@ -718,7 +718,7 @@ i.train <- sample(1:nrow(pydat), size = nrow(pydat)*.8, replace = F)
 pytrain <- XY[i.train,]
 pytest <- XY[-i.train,]
 
-sesh <- ssh_connect('zane@axdd-assessment.s.uw.edu')
+sesh <- ssh_connect(config::get('ssh', 'config.yml'))
 # remote.path <- "data/rtf_freefall"
 write_csv(pytrain, "data/pytrain.csv")
 write_csv(pytest, "data/pytest.csv")

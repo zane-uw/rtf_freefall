@@ -46,9 +46,15 @@ rm(dat, stu.deptwise.wide)
 
 # Initial processing ----------------------------------------------------------
 
+dat.scaled <- dat.scaled %>%
+  select(-starts_with("Ethnic"),
+         -HispanicInd,
+         -yearly_honor_type,
+         -ResidentDesc)
+
 # remove near-zero var vars
-dat.scaled <- dat.scaled[,-nearZeroVar(dat.scaled)]
-dat.scaled <- dat.scaled %>% filter(!is.na(qgpa))
+# dat.scaled <- dat.scaled[,-nearZeroVar(dat.scaled)]
+# dat.scaled <- dat.scaled %>% filter(!is.na(qgpa))
 
 # encode dummies/factors
 # using dat.scaled
@@ -59,7 +65,8 @@ dat.scaled <- dat.scaled %>%
   ungroup()
 
 cat.vars <- Cs(class, child_of_alum, running_start, s1_gender, conditional, with_distinction,
-               low_family_income, appl_class, last_school_type, major.change, ft, premajor, scholarship_type)
+               low_family_income, appl_class, last_school_type, major.change, ft, premajor, scholarship_type,
+               tran_major_abbr)
 
 f <- paste('~', paste(cat.vars, collapse = '+'))
 encoder <- dummyVars(as.formula(f), dat.scaled)
@@ -70,18 +77,18 @@ cat.var.mat <- dat.scaled %>%
 dim(cat.var.mat)
 colnames(cat.var.mat)
 
-mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, num_courses,
-               attmp, nongrd, tot_creds, child_of_alum, running_start, s1_high_satv, s1_high_satm, s1_high_act, trans_gpa,
-               conditional, with_distinction, low_family_income,
-               appl_class, high_sch_gpa, hs_for_lang_type, hs_for_lang_yrs, hs_yrs_for_lang, hs_math_level, hs_yrs_math,
-               hs_yrs_arts, hs_yrs_science, hs_yrs_soc_sci, hs_yrs_english, last_school_type, reg.late.days,
-               major.change, major.change.count, n.unmet, ft, ft.creds.over, n.major.courses, csum.major.courses,
-               premajor, n.alt.grading, avg.class.size, n.writing, n.diversity, n.engl_comp, n.qsr,
-               n.vlpa, n.indiv_soc, n.nat_world, sum.fees, stem.courses)
+# mod.vars <- Cs(system_key, yrq, Y, qtr.seq, class, tenth_day_credits, num_courses,
+#                attmp, nongrd, tot_creds, child_of_alum, running_start, s1_high_satv, s1_high_satm, s1_high_act, trans_gpa,
+#                conditional, with_distinction, low_family_income,
+#                appl_class, high_sch_gpa, hs_for_lang_type, hs_for_lang_yrs, hs_yrs_for_lang, hs_math_level, hs_yrs_math,
+#                hs_yrs_arts, hs_yrs_science, hs_yrs_soc_sci, hs_yrs_english, last_school_type, reg.late.days,
+#                major.change, major.change.count, n.unmet, ft, ft.creds.over, n.major.courses, csum.major.courses,
+#                premajor, n.alt.grading, avg.class.size, n.writing, n.diversity, n.engl_comp, n.qsr,
+#                n.vlpa, n.indiv_soc, n.nat_world, sum.fees, stem.courses, stem.credits, avg.stem.grade, csum.stem.courses, )
 
-mod.vars <- setdiff(mod.vars, cat.vars)
+mod.vars <- setdiff(names(dat.scaled), cat.vars)
 
-lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20, n.w, csum.w, avg.stem.grade, scholarship_type)
+lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20, n.w, csum.w, avg.stem.grade)
 
 mod.dat <- dat.scaled %>%
   # filter(!is.na(qgpa)) %>%
@@ -97,12 +104,12 @@ mod.dat <- dat.scaled %>%
          rundiff = d1 + lag(d1)) %>%
   select(-d1) %>%
   ungroup() %>%
-  select(one_of(mod.vars), one_of(lag.vars))
+  select(Y, one_of(mod.vars), one_of(lag.vars))
 
 mod.dat <- bind_cols(mod.dat, data.frame(cat.var.mat))
 mod.key.vars <- mod.dat %>% select(system_key, yrq)
 mod.dat <- mod.dat %>%
-  select(-system_key, -yrq)
+  select(-system_key, -yrq, -tran_yr, -tran_qtr)
 
 rm(f, encoder, cat.vars, mod.vars, lag.vars, cat.var.mat)
 
@@ -113,17 +120,18 @@ ggplot(mod.dat, aes(x = Y)) + geom_histogram(bins = 50) + geom_vline(xintercept 
 ggplot(mod.dat, aes(x = qgpa, y = Y)) + geom_point() + stat_smooth()
 any(is.na(mod.dat$Y))
 
-sum((mod.dat$Y <= 2.5))/nrow(mod.dat)
+sum((mod.dat$Y <= 2.5), na.rm = T)/nrow(mod.dat)
 
-cormat <- round(cor(mod.dat, use = 'pairwise.complete.obs'), 2)
-cbind(tail(sort(cormat[,1]), n = 10))
-cbind(head(sort(cormat[,1]), n = 10))
-
-rm(cormat)
+# cormat <- round(cor(mod.dat, use = 'pairwise.complete.obs'), 2)
+# cbind(tail(sort(cormat[,1]), n = 10))
+# cbind(head(sort(cormat[,1]), n = 10))
+#
+# rm(cormat)
 
 # XGB model setup ---------------------------------------------------------
 
 # split
+mod.dat <- mod.dat[!is.na(mod.dat$Y),]
 i.train <- createDataPartition(y = mod.dat$Y, p = .75, list = F)
 training <- mod.dat[i.train,]
 testing  <- mod.dat[-i.train,]
@@ -178,12 +186,15 @@ qqline(resid)
 xgb.fit <- xgboost(data = dtrain,
                    params = xgb.params,
                    nrounds = xgbcv$best_iteration,
-                   verbose = TRUE,
+                   verbose = 2,
                    print_every_n = 20,
-                   early_stopping_rounds = 10)
+                   early_stopping_rounds = 10,
+                   nthread = length(cl))
 
 # summary:
 print(xgb.fit, verbose = T)
+
+xgb.fit[1:5]
 
 # predictions:
 xgb.pred <- predict(xgb.fit, dtest)
@@ -198,7 +209,7 @@ plot(resid, testing$Y)
 
 imp.mat <- xgb.importance(model = xgb.fit, feature_names = names(training)[-1])
 # print(importance_matrix)
-xgb.plot.importance(importance_matrix = imp.mat, top_n = 15)
+xgb.plot.importance(importance_matrix = imp.mat, top_n = 20)
 
 xgb.plot.deepness(xgb.fit)
 xgb.plot.shap(data = as.matrix(testing[,-1]), model = xgb.fit, top_n = 5)
@@ -211,4 +222,23 @@ xgb.DMatrix.save(dtest, 'data/xgb-gpa-dtest.dmatrix')
 
 # save fitted model -------------------------------------------------------
 
-xgb.save(xgb.fit, fname = 'models/xgb-gpa-fit.model')
+xgb.save(xgb.fit, fname = 'models/xgb-gpa-w-compass-fit.model')
+
+
+# push -> remote server ---------------------------------------------------
+
+sesh <- ssh::ssh_connect(config::get('ssh', 'config.yml'))
+# remote.path <- "data/rtf_freefall"
+ssh::scp_upload(sesh, files = 'data/xgb-gpa-train.dmatrix', to = 'data/freefall', verbose = T)
+ssh::scp_upload(sesh, files = 'data/xgb-gpa-dtest.dmatrix', to = 'data/freefall', verbose = T)
+ssh::ssh_disconnect(sesh)
+
+# alt models --------------------------------------------------------------
+
+# ols (way too much missing data)
+ols.fit <- lm(Y ~., data = training, na.action = na.exclude, model = T, x = T, y = T)
+summary(ols.fit)
+plot(ols.fit)
+ols.pr <- predict(ols.fit, newdata = testing[,-1])
+plot(ols.pr, testing$Y)
+mean((testing$Y - ols.pr), na.rm = T)
