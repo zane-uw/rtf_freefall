@@ -218,7 +218,8 @@ xgb.plot.shap(data = as.matrix(testing[,-1]), model = xgb.fit, top_n = 5)
 
 xgb.DMatrix.save(dtrain, 'data/xgb-gpa-train.dmatrix')
 xgb.DMatrix.save(dtest, 'data/xgb-gpa-dtest.dmatrix')
-
+write_csv(training, 'data/gpa-w-compass-training.csv')
+write_csv(testing, 'data/gpa-w-compass-testing.csv')
 
 # save fitted model -------------------------------------------------------
 
@@ -231,6 +232,8 @@ sesh <- ssh::ssh_connect(config::get('ssh', 'config.yml'))
 # remote.path <- "data/rtf_freefall"
 ssh::scp_upload(sesh, files = 'data/xgb-gpa-train.dmatrix', to = 'data/freefall', verbose = T)
 ssh::scp_upload(sesh, files = 'data/xgb-gpa-dtest.dmatrix', to = 'data/freefall', verbose = T)
+ssh::scp_upload(sesh, files = 'data/gpa-w-compass-testing.csv')
+ssh::scp_upload(sesh, files = 'data/gpa-w-compass-training.csv')
 ssh::ssh_disconnect(sesh)
 
 # alt models --------------------------------------------------------------
