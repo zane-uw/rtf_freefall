@@ -232,8 +232,8 @@ sesh <- ssh::ssh_connect(config::get('ssh', 'config.yml'))
 # remote.path <- "data/rtf_freefall"
 ssh::scp_upload(sesh, files = 'data/xgb-gpa-train.dmatrix', to = 'data/freefall', verbose = T)
 ssh::scp_upload(sesh, files = 'data/xgb-gpa-dtest.dmatrix', to = 'data/freefall', verbose = T)
-ssh::scp_upload(sesh, files = 'data/gpa-w-compass-testing.csv')
-ssh::scp_upload(sesh, files = 'data/gpa-w-compass-training.csv')
+ssh::scp_upload(sesh, files = 'data/gpa-w-compass-testing.csv', to = 'data/freefall', verbose = T)
+ssh::scp_upload(sesh, files = 'data/gpa-w-compass-training.csv', to = 'data/freefall', verbose = T)
 ssh::ssh_disconnect(sesh)
 
 # alt models --------------------------------------------------------------
