@@ -138,21 +138,57 @@ dat <- dat %>%
 
 dat <- subset(dat, select = -c(InternationalStudentInd, aa_degree, direct_transfer))
 
-cat.vars <- Cs(class,
-               child_of_alum,
+# ordinal variables -> OHE
+ord.vars <- Cs(class,
+               appl_class,
+               hs_math_level)
+
+cat.vars <- Cs(child_of_alum,
+               # class,
                running_start,
                s1_gender,
                conditional,
                with_distinction,
                low_family_income,
-               appl_class,
+               # appl_class,
                last_school_type,
                major.change,
                ft,
                premajor,
                scholarship_type,
                ext_premajor,
-               major_abbr)
+               major_abbr,
+               probe,
+               qgpa15,
+               qgpa20,
+               provisional,
+               hs_for_lang_type,
+               # hs_math_level,
+               reg.late.binary,
+               tran_branch,
+               nonmatric,
+               AddDropclass,
+               JoinAffiliate,
+               AcademicDifficulties,
+               HardshipWithdrawl,
+               Internship,
+               ResearchOpportunities,
+               GraduateProfessionalSchoolA,
+               TestingAssessments,
+               StudyAbroad,
+               CareerCounselingAdvising,
+               AcademicPlanningProgress,
+               PremajorExtension,
+               ReferralCampusCommunity,
+               ComputerLab,
+               ExitInterview,
+               Reinstatement,
+               FinancialAid,
+               GenderEdReq,
+               PersonalFamilyIssues,
+               Other,
+               NoShow,
+               ext_premajor)
 cat.vars <- unique(c(cat.vars, type_names(dat, func = is.character), type_names(dat, func = is.logical)))
 
 f <- paste('~', paste(cat.vars, collapse = '+'))
@@ -163,6 +199,18 @@ cat.var.mat <- dat %>%
   predict(encoder, .)# predict(encoder, dat.scaled)
 dim(cat.var.mat)
 colnames(cat.var.mat)
+
+# <<-- DECISION TIME -->>
+# Full rank or not full rank?
+f <- paste('~', paste(ord.vars, collapse = '+'))
+encoder <- dummyVars(as.formula(f), dat, fullRank = T)
+ord.var.mat <- dat %>%
+  select(ord.vars) %>%
+  mutate_all(as.factor) %>%
+  predict(encoder, .)
+dim(ord.var.mat)
+colnames(ord.var.mat)
+
 
 # The alternative I'll create for now is to recode them w/ reference cats, ie as factors. This won't really be ideal for majors so let's do those separately
 dat <- dat %>% mutate_at(cat.vars, as.factor)
@@ -206,6 +254,11 @@ mod.dat <- dat %>%
 # mod.dat <- bind_cols(mod.dat, data.frame(cat.var.mat))
 
 
+# Also, combine the IC variables
+ic <- mod.dat %>% select(starts_with('IC', ignore.case = F))
+mod.dat$ic_tot <- rowSums(ic)
+rm(ic)
+mod.dat <- mod.dat %>% select(-starts_with('IC', ignore.case = F))
 
 
 # push? -------------------------------------------------------------------
@@ -227,6 +280,11 @@ rm(f, encoder, cat.vars, mod.vars, lag.vars, cat.var.mat, stu.deptwise.wide, new
 
 imp <- mice(as.matrix(mod.dat[,2:20]))
 
+
+
+# Pre process setup -------------------------------------------------------
+
+prep <- preProcess(mod.dat[,-c(1,2,3)], method = c('center', 'scale'))
 
 # model setup -------------------------------------------------------------
 
