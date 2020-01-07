@@ -213,7 +213,7 @@ colnames(ord.var.mat)
 
 
 # The alternative I'll create for now is to recode them w/ reference cats, ie as factors. This won't really be ideal for majors so let's do those separately
-dat <- dat %>% mutate_at(cat.vars, as.factor)
+dat <- dat %>% mutate_at(cat.vars, as.factor) %>% mutate_at(ord.vars, as.factor)
 mm <- data.frame(model.matrix(~dat$major_abbr - 1))
 names(mm) <- str_sub(names(mm), start = 5)
 
@@ -230,7 +230,7 @@ dat <- bind_cols(dat, mm)
 #                premajor, n.alt.grading, avg.class.size, n.writing, n.diversity, n.engl_comp, n.qsr,
 #                n.vlpa, n.indiv_soc, n.nat_world, sum.fees, stem.courses, stem.credits, avg.stem.grade, csum.stem.courses, )
 
-mod.vars <- setdiff(names(dat), cat.vars)
+# mod.vars <- setdiff(names(dat), cat.vars)
 
 lag.vars <- Cs(qgpa, cum.gpa, pts, cum.pts, cum.attmp, tot_creds, attmp, qgpa20, n.w, csum.w, avg.stem.grade)
 
@@ -260,31 +260,50 @@ mod.dat$ic_tot <- rowSums(ic)
 rm(ic)
 mod.dat <- mod.dat %>% select(-starts_with('IC', ignore.case = F))
 
+mod.dat <- mod.dat %>%
+  mutate_at(vars(starts_with('major_abbr')), as.factor)
+
 
 # push? -------------------------------------------------------------------
-  # write_csv(mod.dat, path = 'src_r/risk_gpa25/data/data_any-adverse-qtrly-outcome.csv')
-  # sesh <- ssh::ssh_connect(config::get('ssh', 'config.yml'))
-  # ssh::scp_upload(sesh, files = 'src_r/risk_gpa25/data/data_any-adverse-qtrly-outcome.csv',
-  #                 to = 'data/freefall/', verbose = T)
-  # ssh::ssh_disconnect(sesh)
+  write_csv(mod.dat, path = 'src_r/risk_gpa25/data/data_any-adverse-qtrly-outcome-no-preproc.csv')
+  sesh <- ssh::ssh_connect(config::get('ssh', 'config.yml'))
+  ssh::scp_upload(sesh, files = 'src_r/risk_gpa25/data/data_any-adverse-qtrly-outcome-no-preproc.csv',
+                  to = 'data/freefall/', verbose = T)
+  ssh::ssh_disconnect(sesh)
 
 # finish tidy-up for R-stuff -----------------------------------------------------
+
+key.vars <- c('system_key', 'yrq')
+mod.keys <- mod.dat %>% select(key.vars)
+mod.dat <- mod.dat %>% select(-key.vars)
 
 mod.key.vars <- mod.dat %>% select(system_key, yrq)
 mod.dat <- mod.dat %>% select(-system_key, -yrq)
 
-rm(f, encoder, cat.vars, mod.vars, lag.vars, cat.var.mat, stu.deptwise.wide, new.y, dat.scaled, i)
+# one more bit of cleanup
+names(mod.dat) <- str_replace_all(names(mod.dat), " ", "")
 
 
-# imputation --------------------------------------------------------------
-
-imp <- mice(as.matrix(mod.dat[,2:20]))
+rm(f, encoder, cat.vars, mod.vars, lag.vars, stu.deptwise.wide, new.y, dat.scaled, i, mm, ord.vars) # cat.var.mat, ord.var.mat
 
 
+
+# train/test split --------------------------------------------------------
+
+ix <- createDataPartition(mod.dat$Y, p = .8, list = F)
+training <- mod.dat[ix,]
+testing <- mod.dat[-ix,]
 
 # Pre process setup -------------------------------------------------------
 
-prep <- preProcess(mod.dat[,-c(1,2,3)], method = c('center', 'scale'))
+n <- nearZeroVar(mod.dat, saveMetrics = T, names = T, foreach = T)
+
+prep <- preProcess(training[,-1],
+                   method = c('zv', 'center', 'scale', 'bagImpute'),
+                   verbose = T)
+
+training.pp <- predict(prep, training)
+testing.pp <- predict(prep, testing)
 
 # model setup -------------------------------------------------------------
 
