@@ -511,6 +511,7 @@ aucpr.hp[,which.max(aucpr.hp)]
 
 xgb.params$subsample <- aucpr.hp[,which.max(aucpr.hp)][2]
 xgb.params$colsample_bytree <- aucpr.hp[,which.max(aucpr.hp)][3]
+# .75, .8
 
 # now tune eta
 (eta.grid <- data.frame(eta = seq(.001, .21, length.out = 20)))
@@ -539,7 +540,7 @@ aucpr.eta.tune <- apply(eta.grid, 1, function(param.list){
 
 aucpr.eta.tune
 (xgb.params$eta <- aucpr.eta.tune[2,][which.max(aucpr.eta.tune[1,])])
-
+# .21
 
 # tune max depth ----------------------------------------------------------
 
@@ -566,22 +567,22 @@ aucpr.max_depth.tune <- apply(hpgrid, 1, function(param.list){
 })
 
 aucpr.max_depth.tune
-
-
+(xgb.params$max_depth <- aucpr.max_depth.tune[2,][which.max(aucpr.max_depth.tune[1,])])
+# 9
 
 # xgbcv w/ best params ----------------------------------------------------
 
 xgbcv <- xgb.cv(params = xgb.params,
                 data = dtrain,
                 tree_method = 'hist',
-                nrounds = 100,
+                nrounds = 300,
                 nfold = 5,
                 prediction = T,
                 # save_models = T,
                 showsd = T,
                 stratified = F,
                 verbose = 2,
-                print_every_n = 3,
+                print_every_n = 4,
                 early_stopping_rounds = 10,
                 metrics = list('aucpr', 'error'),
                 watchlist = list(train = dtrain, test = dtest))
@@ -596,7 +597,60 @@ table(xgbcv$pred >= .5, training$Y)
 
 
 
+# Run w/ best -------------------------------------------------------------
 
+xgb.params
+
+xgb.mod <- xgboost(data = dtrain,
+                   params = xgb.params,
+                   tree_method = 'hist',
+                   verbose = 2,
+                   print_every_n = 4,
+                   nrounds = xgbcv$best_ntreelimit)
+
+xgb.save(xgb.mod, fname = paste0("models/xgb-fit-any-adverse-quarterly-outcome_", Sys.Date(), '.model'))
+xgb.mod
+preds <- predict(xgb.mod, newdata = dtest)
+hist(preds)
+prfac <- as.factor(if_else(preds >= .5, "Y", "N"))
+confusionMatrix(prfac, reference = y_test, positive = 'Y', mode = 'prec_recall')
+
+
+# check adjustment pred threshold
+thresh.vals <- sapply(seq(.1, .9, by = .05), function(xv){
+  pr <- as.factor(ifelse(preds >= xv[], "Y", "N"))
+  c <- confusionMatrix(pr, y_test, positive = "Y", mode = 'prec_recall')
+
+  prec <- c$byClass[['Precision']]
+  rec <- c$byClass[['Recall']]
+
+  return(c(prec, rec, xv[]))
+
+}, simplify = T)
+
+thresh.vals
+plot(thresh.vals[1,], thresh.vals[2,], type = 'l', xlab = 'precision', ylab = 'recall'); title(main = 'prec_recall')
+plot(thresh.vals[3,], thresh.vals[1,], type = 'l', col = 'red', xlab = 'threshold', ylab = 'red: precision'); title(main = 'thresh - prec/recall')
+lines(thresh.vals[3,], thresh.vals[2,], type = 'l', col = 'blue')
+
+# ~ .3 - .45 would be alright...
+abline(v = c(.3, .35, .4, .45))
+
+
+# various xgb plots -------------------------------------------------------
+
+xgb.plot.importance(xgb.importance(model = xgb.mod), top_n = 20)
+xgb.plot.shap(as.matrix(training[,-1]), model = xgb.mod, top_n = 5)
+xgb.plot.tree(model = xgb.mod, trees = 12)
+xgb.plot.multi.trees(xgb.mod)
+xgb.plot.deepness(xgb.mod)
+
+xgb.ggplot.importance(xgb.importance(model = xgb.mod), top_n = 30)
+
+xgb.plot.shap(as.matrix(training[,-1]), model = xgb.mod, features = 'cumavg.dept_BIOL', subsample = .5)
+
+
+# old stuff ---------------------------------------------------------------
 
 
   # Old
