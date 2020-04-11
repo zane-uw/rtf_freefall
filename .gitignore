@@ -30,11 +30,15 @@ rsconnect/
 config.R
 config.yml
 scratch.R
+scratch_*
 .csv
 *Icon*
+src/scratch_provide-grades-for-instructure.R
 # always ignore data!
 data/
 # always ignore model outs
 models/
-# custom
-src/scratch_provide-grades-for-instructure.R
+# ignore vizzes
+viz/
+# ignore checkpoints
+*checkpoints*
