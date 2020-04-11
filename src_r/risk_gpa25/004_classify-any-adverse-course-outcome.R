@@ -437,7 +437,8 @@ tree.dat <- dat %>%
 training <- tree.dat[-ix,]
 testing <- tree.dat[ix,]
 table(training$Y); table(testing$Y)
-
+y_test <- as.factor(testing$Y)
+y_train <- as.factor(training$Y)
   # # Pre-process again
   # prep <- preProcess(training[,-1],
   #                    # na.remove = F,
@@ -612,14 +613,14 @@ xgb.save(xgb.mod, fname = paste0("models/xgb-fit-any-adverse-quarterly-outcome_"
 xgb.mod
 preds <- predict(xgb.mod, newdata = dtest)
 hist(preds)
-prfac <- as.factor(if_else(preds >= .5, "Y", "N"))
-confusionMatrix(prfac, reference = y_test, positive = 'Y', mode = 'prec_recall')
+prfac <- as.factor(if_else(preds >= .5, '1', '0'))
+confusionMatrix(prfac, reference = y_test, positive = '1', mode = 'prec_recall')
 
 
 # check adjustment pred threshold
 thresh.vals <- sapply(seq(.1, .9, by = .05), function(xv){
-  pr <- as.factor(ifelse(preds >= xv[], "Y", "N"))
-  c <- confusionMatrix(pr, y_test, positive = "Y", mode = 'prec_recall')
+  pr <- as.factor(ifelse(preds >= xv[], '1', '0'))
+  c <- confusionMatrix(pr, y_test, positive = "1", mode = 'prec_recall')
 
   prec <- c$byClass[['Precision']]
   rec <- c$byClass[['Recall']]
@@ -647,8 +648,8 @@ xgb.plot.deepness(xgb.mod)
 
 xgb.ggplot.importance(xgb.importance(model = xgb.mod), top_n = 30)
 
-xgb.plot.shap(as.matrix(training[,-1]), model = xgb.mod, features = 'cumavg.dept_BIOL', subsample = .5)
-
+xgb.plot.shap(as.matrix(training[,-1]), model = xgb.mod, features = 'cumavg.dept_BIOL', subsample = .2)
+xgb.plot.shap(as.matrix(training[,-1]), model = xgb.mod, features = 'tenth_day_credits', subsample = .2)
 
 # old stuff ---------------------------------------------------------------
 
