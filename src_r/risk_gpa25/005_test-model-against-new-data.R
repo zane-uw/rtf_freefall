@@ -63,16 +63,19 @@ type_names <- function(data, func = is.character){
 }
 
 # merged data set from scratch-reboot file
-load('data/merged-dataset_2020-04-10.RData')
+# load('data/merged-dataset_2020-04-10.RData')
+load('OMAD_adverse_outcome_mod/data/merged-sdb-compass_2020-04-11.RData')
 # Model object
 mod <- xgb.load('models/xgb-fit-any-adverse-quarterly-outcome_2020-01-22.model')
 
-dat <- subset(mrg.dat, select = -c(InternationalStudentInd, aa_degree, direct_transfer))
+# dat <- subset(mrg.dat, select = -c(InternationalStudentInd, aa_degree, direct_transfer))
+dat <- mrg.dat
 
 # describe vars for re-coding transformations
 ord.vars <- Cs(class,
-               appl_class,
                hs_math_level)
+
+## Add back appl_class and tran_branch
 
 cat.vars <- Cs(child_of_alum,
                # class,
@@ -96,7 +99,6 @@ cat.vars <- Cs(child_of_alum,
                hs_for_lang_type,
                # hs_math_level,
                reg.late.binary,
-               tran_branch,
                nonmatric,
                ext_premajor,
                honors_program,

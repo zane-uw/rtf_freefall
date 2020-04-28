@@ -8,11 +8,11 @@ library(odbc)
 setwd(rstudioapi::getActiveProject())
 
 YRQ_0 <- 20064
-EOP_CODES <- c(1, 2, 3, 13, 14, 16, 17, 31, 32, 33)
+EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 
 # **COMPASS DATA** ------------------------------------------------------------
 
-con <- dbConnect(odbc::odbc(), 'compass', timezone = Sys.timezone())
+con <- dbConnect(odbc(), 'compass', timezone = Sys.timezone())
 
 # Not sure why my laptop returns corrupted/garbled data from compass
 # ed. fixed after updating everything (?)
@@ -165,31 +165,31 @@ cal <- tbl(con, in_schema("EDWPresentation.sec", "dimDate")) %>%
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   select(current_yr, current_qtr) %>%
-  collect() %>%
+  # collect() %>%
   mutate(current_yrq = current_yr*10 + current_qtr)
 
 # student_2 is created when a student is admitted - contains first yr/qtr, which isn't in _1
-yrq1 <- tbl(con, in_schema("sec", "student_2")) %>%
-  select(system_key, first_yr_regis, first_qtr_regis) %>%
-  # inner_join(appl_ftfy, copy = T) %>%
-  # collect() %>%
-  mutate(first.yrq = first_yr_regis*10 + first_qtr_regis) %>%
-  filter(first.yrq >= YRQ_0)
+# yrq1 <- tbl(con, in_schema("sec", "student_2")) %>%
+#   select(system_key, first_yr_regis, first_qtr_regis) %>%
+#   # inner_join(appl_ftfy, copy = T) %>%
+#   # collect() %>%
+#   mutate(first.yrq = first_yr_regis*10 + first_qtr_regis) %>%
+#   filter(first.yrq >= YRQ_0)
 
 db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
   filter(special_program %in% EOP_CODES) %>%
   select(system_key) %>%
-  distinct() %>%
-  semi_join(yrq1) # %>%
+  distinct() # %>%
+  # semi_join(yrq1) # %>%
 # collect()
 
-rm(yrq1)
+# rm(yrq1)
 
 
 # TRANSCRIPTS -------------------------------------------------------------
 
 create.transcripts <- function(from_yrq = YRQ_0){
-  result <- tbl(con, in_schema("sec", "transcript")) %>%
+  transcript <- tbl(con, in_schema("sec", "transcript")) %>%
     semi_join(db.eop) %>%
     mutate(yrq = tran_yr*10 + tran_qtr) %>%
     filter(yrq >= from_yrq) %>%       # tran_qtr != 3, add_to_cum == 1
@@ -224,23 +224,63 @@ create.transcripts <- function(from_yrq = YRQ_0){
            -qtr_grade_points,
            -qtr_graded_attmp,
            -qtr_nongrd_earned,
-           -qtr_deductible) %>%
+           -qtr_deductible) # %>%
+    # group_by(system_key) %>%
+    # arrange(system_key, yrq) %>%
+    # mutate(cum.pts = cumsum(pts),
+    #        cum.attmp = cumsum(attmp),
+    #        cum.gpa = cum.pts / cum.attmp) %>%
+    # ungroup()
+
+  # combine with current quarter from registration
+  # need to calculate attempted from the regis_courses current
+  reg.courses <- tbl(con, in_schema('sec', 'registration_courses')) %>%
+    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    semi_join(db.eop) %>%
+    filter(`repeat` == '0' | is.na(`repeat`) | `repeat` == '',
+           grading_system != 9,
+           # system_key == 777087,  # testing
+           request_status %in% c('A', 'C', 'R'))
+
+  calc.attmp <- reg.courses %>%
+    # select(system_key, index1, request_status, starts_with('crs_'), grading_system, credits, `repeat`) %>% collect()
+    group_by(system_key) %>%
+    summarize(attmp = sum(credits, na.rm = T)) %>%
+    ungroup()
+  calc.num.courses <- reg.courses %>%
+    group_by(system_key, crs_curric_abbr) %>%
+    summarize(num_courses = n_distinct(crs_number)) %>%
+    group_by(system_key, add = F) %>%
+    summarize(num_courses = sum(num_courses, na.rm = T))
+
+
+  # get.current.quarter.reg <- function(){
+  curr.reg <- tbl(con, in_schema('sec', 'registration')) %>%
+    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    semi_join(db.eop) %>%
+    inner_join(calc.attmp) %>%
+    inner_join(calc.num.courses) %>%
+    mutate(yrq = regis_yr*10 + regis_qtr) %>%
+    select(system_key,
+           yrq,
+           class = regis_class,
+           honors_program = regis_hnrs_prg,
+           tenth_day_credits,
+           attmp,
+           num_courses) %>%
+    collect()
+
+  result <- bind_rows(transcript, curr.reg) %>%
     group_by(system_key) %>%
     arrange(system_key, yrq) %>%
     mutate(cum.pts = cumsum(pts),
            cum.attmp = cumsum(attmp),
-           cum.gpa = cum.pts / cum.attmp) %>%
-    ungroup()
+           cum.gpa = cum.pts / cum.attmp)
 
   return(result)
 }
 
-
-# DERIVED COURSES-TAKEN FIELDS ----------------------------------------------
-
-create.derived.courses.taken.tscs.data <- function(){
-# combining the following calculations that have `courses.taken` as a dependency and
-# return ~ equally long combined table
+get.courses.taken <- function(){
 
   courses.taken <- tbl(con, in_schema("sec", "transcript_courses_taken")) %>%
     semi_join(db.eop) %>%
@@ -248,7 +288,7 @@ create.derived.courses.taken.tscs.data <- function(){
     filter(yrq >= YRQ_0) %>%
     select(system_key,
            yrq,
-           index1,
+           course.index = index1,
            dept_abbrev,
            course_number,
            course_credits,
@@ -261,7 +301,8 @@ create.derived.courses.taken.tscs.data <- function(){
            section_id) %>%
     collect() %>%
     mutate_if(is.character, trimws) %>%         # doesn't work correctly remotely, unsafe to do other string mutations w/ output before trimming
-    rename(course.index = index1) %>%
+    # but don't want to build the course code w/ the extra whitespace :\
+    # rename(course.index = index1) %>%
     mutate(course = paste(dept_abbrev, course_number, sep = "_"),
            duplicate_indic = as.numeric(duplicate_indic),
            numeric.grade = recode(grade,
@@ -282,6 +323,59 @@ create.derived.courses.taken.tscs.data <- function(){
            course.withdraw = if_else(grepl("W", grade), 1, 0),
            course.nogpa = if_else(grade %in% c("", "CR", "H", "HP", "HW", "I", "N", "NC", "NS", "P", "S", "W", "W3", "W4", "W5", "W6", "W7"), 1, 0),
            course.alt.grading = if_else(grade %in% c('CR', 'S', 'NS', 'P', 'HP', 'NC'), 1, 0))
+
+  # combine with current quarter course reg
+  curr.qtr <- tbl(con, in_schema('sec', 'registration_courses')) %>%
+    semi_join(db.eop) %>%
+    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    filter(request_status %in% c('A', 'C', 'R')) %>%
+    collect() %>%
+    mutate_if(is.character, trimws) %>%
+    mutate(yrq = regis_yr*10 + regis_qtr,
+           course.alt.grading = if_else(grading_system > 0, 1, 0),
+           duplicate_indic = as.numeric(dup_enroll),
+           # replace_na(list('duplicate_indic' = 0)),
+           repeat_course = if_else(`repeat` %in% c('1', '2', '3'), T, F),
+           course = paste(crs_curric_abbr, crs_number, sep = '_')) %>%
+    select(system_key,
+           yrq,
+           course.index = index1,
+           dept_abbrev = crs_curric_abbr,
+           course_number = crs_number,
+           course_credits = credits,
+           course_branch,
+           summer_term,
+           # grade
+           duplicate_indic,
+           repeat_course,
+           honor_course,
+           section_id = crs_section_id,
+           course,
+           # numeric.grade
+           # course.withdraw
+           # course.nogpa
+           #
+           course.alt.grading) %>%
+    group_by(system_key, course) %>%
+    arrange(system_key, course, section_id) %>%
+    filter(row_number() == 1) %>%
+    ungroup()
+
+
+  result <- bind_rows(courses.taken, curr.qtr) %>% distinct() %>% replace_na(list('duplicate_indic' = 0))
+
+  return(result)
+}
+
+# courses.taken <- get.courses.taken()
+
+# DERIVED COURSES-TAKEN FIELDS ----------------------------------------------
+
+create.derived.courses.taken.tscs.data <- function(){
+# combining the following calculations that have `courses.taken` as a dependency and
+# return ~ equally long combined table
+
+  courses.taken <- get.courses.taken()
 
   # total of fees, courses taken in different gen ed categories
   # vlpa, qsr, etc.
@@ -437,10 +531,28 @@ create.derived.courses.taken.tscs.data <- function(){
 
 create.wide.major.data <- function(){
 
+  # for current q
+  reg.major <- tbl(con, in_schema('sec', 'registration_regis_col_major')) %>%
+    semi_join(db.eop) %>%
+    inner_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    select(system_key,
+           yrq = current_yrq,
+           index1,
+           tran_yr = regis_yr,
+           tran_qtr = regis_qtr,
+           tran_major_abbr = regis_major_abbr)
+
   mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
     semi_join(db.eop) %>%
     mutate(yrq = tran_yr*10 + tran_qtr) %>%
     filter(yrq >= YRQ_0) %>%
+    select(system_key,
+           yrq,
+           index1,
+           tran_yr,
+           tran_qtr,
+           tran_major_abbr) %>%
+    full_join(reg.major) %>%
     mutate_if(is.character, trimws)
 
   # calc double+ majors
@@ -545,16 +657,16 @@ calc.adjusted.age <- function(){
   bd <- tbl(con, in_schema('sec', 'student_1')) %>%
     select(system_key, birth_dt) %>%
     semi_join(db.eop) %>%
-    inner_join( tbl(con, in_schema('sec', 'transcript')) %>%
-                  select(system_key, tran_yr, tran_qtr) ) %>%
-    mutate(table_key = paste0('0', as.character(tran_yr), as.character(tran_qtr), ' '))
+    inner_join( tbl(con, in_schema('sec', 'registration')) %>%
+                  select(system_key, regis_yr, regis_qtr) ) %>%
+    mutate(table_key = paste0('0', as.character(regis_yr), as.character(regis_qtr), ' '))
 
   result <- tbl(con, in_schema('sec', 'sys_tbl_39_calendar')) %>%
     select(table_key, tenth_day) %>%
     inner_join(bd) %>%
     collect() %>%
     mutate(age = as.numeric(difftime(tenth_day, birth_dt, units = "days")) / 364.25,
-           yrq = tran_yr*10 + tran_qtr) %>%
+           yrq = regis_yr*10 + regis_qtr) %>%
     select(system_key, yrq, age)
 
   # rm(bd)
@@ -755,11 +867,13 @@ create.holds <- function(){
 # RUN create funcs --------------------------------------------------------------
 
 # Yes, could do more of this server-side
+# this is useful for verification
 
 transcript <- create.transcripts()
+courses.taken <- get.courses.taken()
 derived.courses.taken.data <- create.derived.courses.taken.tscs.data()
 majors <- create.wide.major.data()
-stu.age <- calc.adjusted.age()
+stu.age <- calc.adjusted.age() # need to fix this for extra current q
 appl.data <- create.application.data() %>% select(-c(appl_yr, appl_qtr, appl_no))
 unmet.reqs <- create.unmet.requests()
 late.reg <- create.late.registrations()
@@ -836,14 +950,15 @@ names(mrg.dat)[sapply(mrg.dat, is.logical)]
 mrg.dat <- mrg.dat %>%
   mutate_if(is.logical, as.numeric)
 
+
 # Full time = 12 credits
 # add qtr.sequence for 'time' (rough as that is)
 # and extended premajor
 mrg.dat <- mrg.dat %>%
-  mutate(ft = if_else(tenth_day_credits >= 12, T, F),
+  mutate(ft = if_else(tenth_day_credits >= 12, 1, 0),
          ft.creds.over = if_else(tenth_day_credits >= 12, tenth_day_credits - 12, 0),
          ext_premajor = if_else(major_abbr == 'EPRMJ', 1, 0)) %>%
-  group_by(system_key, yrq) %>%
+  group_by(system_key) %>%
   arrange(system_key, yrq) %>%
   mutate(qtr.seq = row_number()) %>%
   ungroup()
@@ -871,5 +986,4 @@ mrg.dat <- mrg.dat %>% select(-starts_with('IC', ignore.case = F))
 # save --------------------------------------------------------------------
 
 save(mrg.dat, file = paste0('OMAD_adverse_outcome_mod/data/merged-sdb-compass_', Sys.Date(), '.RData'))
-# may use these later
-# save(courses.taken, xf.trs.courses, file = 'data/courses-taken.RData')
+save(courses.taken, file = 'OMAD_adverse_outcome_mod/data/Y-courses-taken.RData')
