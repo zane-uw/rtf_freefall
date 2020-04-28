@@ -11,8 +11,10 @@ YRQ_0 <- 20064
 EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 
 # **COMPASS DATA** ------------------------------------------------------------
-
-con <- dbConnect(odbc(), 'compass', timezone = Sys.timezone())
+# For reasons that are opaque to me compass-db doesn't work w/ kerberos auth like my other DB con
+# So we can't dispense w/ `config` completely
+con <- con <- dbConnect(odbc::odbc(), "compass", timezone = Sys.timezone(),
+                        UID = config::get("sdb", file = "config.yml")$uid, PWD = keyring::key_get("sdb"))
 
 # Not sure why my laptop returns corrupted/garbled data from compass
 # ed. fixed after updating everything (?)
@@ -224,13 +226,7 @@ create.transcripts <- function(from_yrq = YRQ_0){
            -qtr_grade_points,
            -qtr_graded_attmp,
            -qtr_nongrd_earned,
-           -qtr_deductible) # %>%
-    # group_by(system_key) %>%
-    # arrange(system_key, yrq) %>%
-    # mutate(cum.pts = cumsum(pts),
-    #        cum.attmp = cumsum(attmp),
-    #        cum.gpa = cum.pts / cum.attmp) %>%
-    # ungroup()
+           -qtr_deductible)
 
   # combine with current quarter from registration
   # need to calculate attempted from the regis_courses current
@@ -251,7 +247,8 @@ create.transcripts <- function(from_yrq = YRQ_0){
     group_by(system_key, crs_curric_abbr) %>%
     summarize(num_courses = n_distinct(crs_number)) %>%
     group_by(system_key, add = F) %>%
-    summarize(num_courses = sum(num_courses, na.rm = T))
+    summarize(num_courses = sum(num_courses, na.rm = T)) %>%
+    ungroup()
 
 
   # get.current.quarter.reg <- function(){
@@ -275,7 +272,8 @@ create.transcripts <- function(from_yrq = YRQ_0){
     arrange(system_key, yrq) %>%
     mutate(cum.pts = cumsum(pts),
            cum.attmp = cumsum(attmp),
-           cum.gpa = cum.pts / cum.attmp)
+           cum.gpa = cum.pts / cum.attmp) %>%
+    ungroup()
 
   return(result)
 }
@@ -437,7 +435,8 @@ create.derived.courses.taken.tscs.data <- function(){
       group_by(system_key, add = F) %>%
       mutate(csum.rep.courses = cumsum(rep.courses),
              csum.w = cumsum(n.w),
-             csum.alt.grading = cumsum(n.alt.grading))
+             csum.alt.grading = cumsum(n.alt.grading)) %>%
+      ungroup()
 
     return(result)
   }
@@ -598,7 +597,8 @@ create.wide.major.data <- function(){
     summarize(n.major.courses = sum(course.equals.major)) %>%
     group_by(system_key, add = F) %>%
     arrange(system_key, yrq) %>%
-    mutate(csum.major.courses = cumsum(n.major.courses))
+    mutate(csum.major.courses = cumsum(n.major.courses)) %>%
+    ungroup()
 
   # simplify the result(s) to 1 table
   result <- stu.major %>%
@@ -690,38 +690,12 @@ create.application.data <- function(){
 
   # ...get (many) --------------------------------------------------------
 
-  # REMOVED
-  # appl.income <- tbl(con, in_schema("sec", "sr_adm_appl_income_data")) %>%
-  #   semi_join(app.filter) %>%
-  #   mutate(yrq = appl_yr*10 + appl_qtr) %>%
-  #   collect() %>%
-  #   group_by(system_key, yrq) %>%
-  #   summarize(income_dependent_true = if_else(all(income_dependent == T), T, F),       # MSSQL doesn't like to pass summarize forward like this
-  #             income_gross_median = median(income_gross, na.rm = T),
-  #             income_fam_size_median = median(income_fam_size, na.rm = T),
-  #             income_fam_ratio = income_gross_median / income_fam_size_median) %>%
-  #   ungroup() %>%
-  #   mutate(income_fam_ratio = ifelse(is.infinite(income_fam_ratio), income_gross_median, income_fam_ratio))
-
-  # sr.appl <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
-  #   filter(appl_type %in% c(1, 2, 4, 6, "R"),
-  #          appl_yr >= 2003,
-  #          appl_status %in% c(11, 12, 15, 16, 26)) %>%
-  #   select(system_key, appl_yr, appl_qtr, appl_no, appl_type, appl_status, appl_branch, athlete_code,
-  #          class, conditional, deg_lvl_goal, eop_group, high_sch_gpa,
-  #          hs_for_lang_type, hs_for_lang_yrs, hs_yrs_for_lang, hs_math_level, hs_yrs_math, hs_yrs_arts,
-  #          hs_yrs_science, hs_yrs_soc_sci,hs_yrs_english, hs_esl_engl,
-  #          home_addr_code, last_school_type, ncr_code, special_program,
-  #          trans_gpa, aa_degree, direct_transfer,
-  #          appl_cohort, provisional, with_distinction, res_in_question, low_family_income) %>%
-  #   semi_join(app.filter) %>%
-  #   collect()
-
   gpa <- tbl(con, in_schema('sec', 'sr_adm_appl')) %>%
     semi_join(db.eop) %>%
     group_by(system_key) %>%
     summarize(high_sch_gpa = max(high_sch_gpa, na.rm = T),
-              trans_gpa = max(trans_gpa, na.rm = T))
+              trans_gpa = max(trans_gpa, na.rm = T)) %>%
+    ungroup()
 
   sr.appl <- tbl(con, in_schema("sec", "sr_adm_appl")) %>%
     semi_join(app.filter) %>%
@@ -757,26 +731,6 @@ create.application.data <- function(){
     summarize(guardian.ed.max = max(guardian_ed_level, na.rm = T),
               guardian.ed.min = min(guardian_ed_level, na.rm = T)) %>%
     ungroup()
-
-  # REMOVED
-  # appl.req.major <- tbl(con, in_schema("sec", "sr_adm_appl_req_col_major")) %>%
-  #   semi_join(app.filter) %>%
-  #   mutate(req_major_abbr = ifelse(req_major_abbr == '000000', NA, req_major_abbr)) %>%
-  #   filter(index1 == 1) %>%
-  #   select(system_key, req_major_abbr) %>%
-  #   collect() %>%
-  #   mutate_if(is.character, trimws)     # some minor time could likely be saved by doing this once for the whole thing
-
-  #REMOVED
-  # # initial placement, not request
-  # appl.init.major <- tbl(con, in_schema("sec", "sr_adm_appl_college_major")) %>%
-  #   semi_join(app.filter) %>%
-  #   # group_by(system_key) %>%
-  #   # select(major_abbr) %>%
-  #   # slice(1) %>%
-  #   filter(index1 == 1) %>%
-  #   collect() %>%
-  #   mutate_if(is.character, trimws)
 
   # combine applications:
   appl.data <- sr.appl %>%
@@ -832,7 +786,8 @@ create.late.registrations <- function(){
     distinct() %>%
     left_join(syscal) %>%
     collect() %>%
-    mutate(reg.late.days = as.numeric(difftime(add_dt_tuit, first_day, units = "days")))
+    mutate(reg.late.days = as.numeric(difftime(add_dt_tuit, first_day, units = "days"))) %>%
+    ungroup()
 
   regc$reg.late.days[regc$reg.late.days <= -365] <- median(regc$reg.late.days[regc$reg.late.days < 0])
   regc$reg.late.binary <- if_else(regc$reg.late.days >= 0, 1, 0)
@@ -949,7 +904,6 @@ mrg.dat <- transcript %>%
 names(mrg.dat)[sapply(mrg.dat, is.logical)]
 mrg.dat <- mrg.dat %>%
   mutate_if(is.logical, as.numeric)
-
 
 # Full time = 12 credits
 # add qtr.sequence for 'time' (rough as that is)
