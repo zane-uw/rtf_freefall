@@ -31,10 +31,10 @@ config.R
 config.yml
 scratch.R
 scratch_*
-.csv
+*.csv
 *Icon*
 src/scratch_provide-grades-for-instructure.R
-# always ignore data!
+# always ignore `data`
 data/
 data-*
 # always ignore model outs
