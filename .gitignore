@@ -36,7 +36,7 @@ scratch_*
 src/scratch_provide-grades-for-instructure.R
 # always ignore `data`
 data/
-data-*
+OMAD_adverse_outcome_mod/data-preds/
 # always ignore model outs
 models/
 # ignore vizzes
