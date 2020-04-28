@@ -13,7 +13,7 @@ EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 # **COMPASS DATA** ------------------------------------------------------------
 # For reasons that are opaque to me compass-db doesn't work w/ kerberos auth like my other DB con
 # So we can't dispense w/ `config` completely
-con <- con <- dbConnect(odbc::odbc(), "compass", timezone = Sys.timezone(),
+con <- dbConnect(odbc::odbc(), "compass", timezone = Sys.timezone(),
                         UID = config::get("sdb", file = "config.yml")$uid, PWD = keyring::key_get("sdb"))
 
 # Not sure why my laptop returns corrupted/garbled data from compass
@@ -166,7 +166,7 @@ cal <- tbl(con, in_schema("EDWPresentation.sec", "dimDate")) %>%
   select(yrq = AcademicQtrKeyId, dt = CalendarDate)
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
-  select(current_yr, current_qtr) %>%
+  select(current_yr, current_qtr, gl_first_day) %>%
   # collect() %>%
   mutate(current_yrq = current_yr*10 + current_qtr)
 
@@ -233,10 +233,27 @@ create.transcripts <- function(from_yrq = YRQ_0){
   reg.courses <- tbl(con, in_schema('sec', 'registration_courses')) %>%
     semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
     semi_join(db.eop) %>%
-    filter(`repeat` == '0' | is.na(`repeat`) | `repeat` == '',
-           grading_system != 9,
+    # [TODO] need to include everyone - repeats ok, duplicate not?
+    #  ...   and that means figuring out how to include students who w/drew after 10th day?
+    # filter(request_status %in% c('', '')
+    filter(!(request_status %in% c('E', 'L')))
+           # grading_system != 9,
            # system_key == 777087,  # testing
-           request_status %in% c('A', 'C', 'R'))
+           #request_status %in% c('A', 'C', 'R')
+           # `repeat` == '0' | is.na(`repeat`) | `repeat` == '',)
+  # Can we use the first day to selectively preserve records where student dropped?
+  # d1 <- currentq %>% select(gl_first_day) %>% collect()
+
+  reg.courses <- reg.courses %>%
+    left_join( select(currentq, current_yr, current_qtr, gl_first_day ),
+               by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    mutate(to.drop = if_else(request_status == 'D' & request_dt < gl_first_day, 1, 0)) %>%
+    filter(to.drop == 0) %>%
+    select(-to.drop,
+           -gl_first_day)
+  # [TODO]
+  # Let's TRY proceeding with this
+
 
   calc.attmp <- reg.courses %>%
     # select(system_key, index1, request_status, starts_with('crs_'), grading_system, credits, `repeat`) %>% collect()

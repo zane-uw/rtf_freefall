@@ -32,6 +32,7 @@ config.yml
 scratch.R
 scratch_*
 *.csv
+.joblib
 *Icon*
 src/scratch_provide-grades-for-instructure.R
 # always ignore `data`
