@@ -178,14 +178,15 @@ currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
 #   mutate(first.yrq = first_yr_regis*10 + first_qtr_regis) %>%
 #   filter(first.yrq >= YRQ_0)
 
+
 db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
   filter(special_program %in% EOP_CODES) %>%
   select(system_key) %>%
-  distinct() # %>%
-  # semi_join(yrq1) # %>%
-# collect()
-
-# rm(yrq1)
+  full_join( tbl(con, in_schema('sec', 'registration')) %>%
+                   filter(special_program %in% EOP_CODES) %>%
+                   select(system_key)
+            ) %>%
+  distinct()
 
 
 # TRANSCRIPTS -------------------------------------------------------------

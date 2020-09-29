@@ -7,14 +7,14 @@
 rm(list = ls())
 gc()
 
-library(xgboost)
-library(xgboostExplainer)
+# library(xgboost)
+# library(xgboostExplainer)
 library(tidyverse)
 # library(pROC)
-library(doParallel)
+# library(doParallel)
 # library(mice)
 # library(parsnip)
-library(tidymodels)
+# library(tidymodels)
 library(caret)
 
 setwd(rstudioapi::getActiveProject())
@@ -25,8 +25,8 @@ options(tibble.print_max = 250)
 # parallel setup
 # stopCluster(cl)
 # registerDoSEQ()
-cl <- makeCluster((detectCores() / 2), type = "PSOCK"); cl
-registerDoParallel(cl)
+# cl <- makeCluster((detectCores() / 2), type = "PSOCK"); cl
+# registerDoParallel(cl)
 
 #' Add quotes to an unquoted list of characters
 #'
