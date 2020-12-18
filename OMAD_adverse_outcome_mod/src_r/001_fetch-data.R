@@ -178,13 +178,16 @@ currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
 #   mutate(first.yrq = first_yr_regis*10 + first_qtr_regis) %>%
 #   filter(first.yrq >= YRQ_0)
 
-
 db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
   filter(special_program %in% EOP_CODES) %>%
   select(system_key) %>%
   full_join( tbl(con, in_schema('sec', 'registration')) %>%
                    filter(special_program %in% EOP_CODES) %>%
                    select(system_key)
+            ) %>%
+  full_join( tbl(con, in_schema('sec', 'student_1')) %>%
+               filter(spcl_program %in% EOP_CODES) %>%
+               select(system_key)
             ) %>%
   distinct()
 
@@ -789,8 +792,8 @@ create.late.registrations <- function(){
     filter(first_day >= "2004-01-01") %>%                           # arbitrary, some kind of limit is helpful
     select(table_key, first_day, tenth_day, last_day_add) %>%
     #collect() %>%
-    mutate(yrq = as.numeric(table_key),
-           regis_yr = round(yrq %/% 10, 0),        # r floor div operator works incorrectly in sql tbl, presumably b/c of the % but I'm not looking it up right now
+    mutate(yrq = as.integer(table_key),
+           regis_yr = round(yrq %/% 10, 0),
            regis_qtr = yrq %% 10)
 
   # "fixes" still don't eliminate the extremely off dates, so I'll stick with the min and correct the ones I see right now
