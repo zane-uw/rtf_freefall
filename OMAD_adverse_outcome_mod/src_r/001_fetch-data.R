@@ -166,9 +166,10 @@ cal <- tbl(con, in_schema("EDWPresentation.sec", "dimDate")) %>%
   select(yrq = AcademicQtrKeyId, dt = CalendarDate)
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
-  select(current_yr, current_qtr, gl_first_day) %>%
+  select(current_yr, current_qtr, gl_first_day, gl_regis_year, gl_regis_qtr) %>%
   # collect() %>%
-  mutate(current_yrq = current_yr*10 + current_qtr)
+  mutate(current_yrq = current_yr*10 + current_qtr,
+         gl_regis_yrq = gl_regis_year*10 + gl_regis_qtr)
 
 # student_2 is created when a student is admitted - contains first yr/qtr, which isn't in _1
 # yrq1 <- tbl(con, in_schema("sec", "student_2")) %>%
@@ -232,32 +233,23 @@ create.transcripts <- function(from_yrq = YRQ_0){
            -qtr_nongrd_earned,
            -qtr_deductible)
 
+  # system calendar for filtering join
+  sys.cal <-tbl(con, in_schema('sec', 'sys_tbl_39_calendar')) %>%
+    filter(first_day > '2019-01-01') %>%
+    select(table_key, first_day) %>%
+    mutate(yrq = as.integer(table_key),
+           cal_year = round(yrq %/% 10, 0),
+           cal_qtr = round(yrq %% 10, 0))
+
   # combine with current quarter from registration
   # need to calculate attempted from the regis_courses current
   reg.courses <- tbl(con, in_schema('sec', 'registration_courses')) %>%
-    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    filter(!(request_status %in% c('E', 'L'))) %>%
     semi_join(db.eop) %>%
-    # [TODO] need to include everyone - repeats ok, duplicate not?
-    #  ...   and that means figuring out how to include students who w/drew after 10th day?
-    # filter(request_status %in% c('', '')
-    filter(!(request_status %in% c('E', 'L')))
-           # grading_system != 9,
-           # system_key == 777087,  # testing
-           #request_status %in% c('A', 'C', 'R')
-           # `repeat` == '0' | is.na(`repeat`) | `repeat` == '',)
-  # Can we use the first day to selectively preserve records where student dropped?
-  # d1 <- currentq %>% select(gl_first_day) %>% collect()
-
-  reg.courses <- reg.courses %>%
-    left_join( select(currentq, current_yr, current_qtr, gl_first_day ),
-               by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
-    mutate(to.drop = if_else(request_status == 'D' & request_dt < gl_first_day, 1, 0)) %>%
-    filter(to.drop == 0) %>%
-    select(-to.drop,
-           -gl_first_day)
-  # [TODO]
-  # Let's TRY proceeding with this
-
+    # filter drops prior to first day using the sys.call filter above
+    left_join(sys.cal, by = c('regis_yr' = 'cal_year', 'regis_qtr' = 'cal_qtr')) %>%
+    filter(!(request_status == 'D' & request_dt < first_day))
 
   calc.attmp <- reg.courses %>%
     # select(system_key, index1, request_status, starts_with('crs_'), grading_system, credits, `repeat`) %>% collect()
@@ -271,10 +263,9 @@ create.transcripts <- function(from_yrq = YRQ_0){
     summarize(num_courses = sum(num_courses, na.rm = T)) %>%
     ungroup()
 
-
   # get.current.quarter.reg <- function(){
   curr.reg <- tbl(con, in_schema('sec', 'registration')) %>%
-    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
     semi_join(db.eop) %>%
     inner_join(calc.attmp) %>%
     inner_join(calc.num.courses) %>%
@@ -346,7 +337,7 @@ get.courses.taken <- function(){
   # combine with current quarter course reg
   curr.qtr <- tbl(con, in_schema('sec', 'registration_courses')) %>%
     semi_join(db.eop) %>%
-    semi_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
     filter(request_status %in% c('A', 'C', 'R')) %>%
     collect() %>%
     mutate_if(is.character, trimws) %>%
@@ -551,10 +542,10 @@ create.derived.courses.taken.tscs.data <- function(){
 
 create.wide.major.data <- function(){
 
-  # for current q
+  # for newest quarter
   reg.major <- tbl(con, in_schema('sec', 'registration_regis_col_major')) %>%
     semi_join(db.eop) %>%
-    inner_join(currentq, by = c('regis_yr' = 'current_yr', 'regis_qtr' = 'current_qtr')) %>%
+    inner_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
     select(system_key,
            yrq = current_yrq,
            index1,
