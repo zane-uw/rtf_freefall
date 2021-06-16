@@ -123,8 +123,7 @@ dat <- dat %>%
   ungroup() %>%
   select(-d1)
 
-# Recode categorical vars (not doing this here right now) ------------------------------------
-# just run the lags and split the data
+# run the lags and split the data
 process.transformations <- function(df, OHE.enc = T){
   lag.vars <- Cs(qgpa,
                  cum.gpa,
@@ -197,23 +196,28 @@ process.transformations <- function(df, OHE.enc = T){
     bind_cols(., data.frame(cat.var.mat))
 
   return(dat)
-  }
-
-  return(dat)
+  } else return(dat)
 }
 
 
 
 # split newest data -------------------------------------------------------
 
-# new prediction dat (curr 20201->2)
+# new prediction data -- these should be proc'd separately
 split.yrq <- max(dat$yrq)
-# create lags but not the OHE
-dat <- process.transformations(dat, OHE.enc = F)
-new.pred.data <- dat %>% filter(dat$yrq == split.yrq) # %>% select(-Y)
-# don't want lags for 'new' data b/c the lag is built-in
+new.pred.stus <- dat %>% filter(yrq == split.yrq) %>% select(system_key)
+new.pred.data <- dat %>% semi_join(new.pred.stus)
 
-dat <- dat %>% filter(dat$yrq < split.yrq)
+dat <- dat %>% anti_join(new.pred.stus)
+
+new.pred.data <- process.transformations(new.pred.data, OHE.enc = F)
+dat <- process.transformations(dat, OHE.enc = F)
+
+
+# new.pred.data <- dat %>% filter(dat$yrq == split.yrq) # %>% select(-Y)
+# dat <- dat %>% filter(dat$yrq < split.yrq)
+# # create lags but not the OHE (for nnet but also better done in python pipe)
+# dat <- process.transformations(dat, OHE.enc = F)
 
 
 # Save ------------------------------------------------
@@ -221,7 +225,7 @@ dat <- dat %>% filter(dat$yrq < split.yrq)
 # transformations will be in the python pipeline
 # as will train/test split
 write_csv(dat, 'OMAD_adverse_outcome_mod/data/transformed-data-to-py.csv')
-new.pred.data %>% select(-Y) %>% write_csv(., 'OMAD_adverse_outcome_mod/data/new-data-to-predict.csv')
+new.pred.data %>% filter(yrq == split.yrq) %>% select(-Y) %>% write_csv(., 'OMAD_adverse_outcome_mod/data/new-data-to-predict.csv')
 
 cat.vars <- Cs(class,
                scholarship_type,

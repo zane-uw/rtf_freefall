@@ -10,9 +10,11 @@ setwd(rstudioapi::getActiveProject())
 YRQ_0 <- 20064
 EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 
+# for summer:
+suyr <- 2021
+suqtr <- 3
+
 # **COMPASS DATA** ------------------------------------------------------------
-# For reasons that are opaque to me compass-db doesn't work w/ kerberos auth like my other DB con
-# So we can't dispense w/ `config` completely
 con <- dbConnect(odbc::odbc(), "compass", timezone = Sys.timezone(),
                         UID = config::get("sdb", file = "config.yml")$uid, PWD = keyring::key_get("sdb"))
 
@@ -40,8 +42,8 @@ appt <- tbl(con, 'appointment') %>%
 
 dbDisconnect(con); rm(con)
 
-con <- dbConnect(odbc(), 'sqlserver01')
-cal <- tbl(con, in_schema('EDWPresentation.sec', 'dimDate')) %>%
+con <- dbConnect(odbc(), 'sdb', UID = config::get('sdb')$uid, PWD = config::get('sdb')$pwd)
+cal <- tbl(con, in_schema(sql("EDWPresentation.sec"), 'dimDate')) %>%
   filter(CalendarYr >= 2008) %>%
   select(CalendarDate, AcademicQtrKeyId, AcademicQtrDayNum, AcademicQtrWeekNum, AcademicQtrName, AcademicQtrCensusDayInd, AcademicYrName) %>%
   collect() %>%
@@ -56,7 +58,7 @@ dbDisconnect(con); rm(con)
 dat <- appt %>%
   # mutate(Date = as.POSIXct(Date, tz = 'UTC')) %>%
   mutate(t_in = paste(str_sub(Date, end = 10), str_sub(Time_In, end = 5), sep = ' '),
-         Date = as.POSIXct(Date, tz = 'UTC')) %>%
+         Date = as.POSIXct(str_sub(Date, 1, 10), tz = 'UTC')) %>%
   filter(str_length(t_in) == 16) %>%
   inner_join(cal, by = c('Date' = 'CalendarDate')) %>%
   mutate(AcademicQtrKeyId = as.numeric(AcademicQtrKeyId),
@@ -153,8 +155,7 @@ rm(con, adv.wk, ic.wk, n, adv.agg, ic.activity.agg, hs, ic, adv, dat, cal, sid, 
 
 # **SDB DATA** ----------------------------------------------------------------
 
-# !kinit
-con <- dbConnect(odbc::odbc(), 'sqlserver01')
+con <- dbConnect(odbc(), 'sdb', UID = config::get('sdb')$uid, PWD = config::get('sdb')$pwd)
 
 # Utility tables -------------------------------------------------------------------
 # calendar
@@ -162,7 +163,7 @@ con <- dbConnect(odbc::odbc(), 'sqlserver01')
 # filtering query for EOP students
 
 # academic calendar
-cal <- tbl(con, in_schema("EDWPresentation.sec", "dimDate")) %>%
+cal <- tbl(con, in_schema(sql("EDWPresentation.sec"), "dimDate")) %>%
   select(yrq = AcademicQtrKeyId, dt = CalendarDate)
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
@@ -190,8 +191,12 @@ db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
                filter(spcl_program %in% EOP_CODES) %>%
                select(system_key)
             ) %>%
+  # ADD ISS O students
+  full_join( tbl(con, in_schema('sec', 'transcript_tran_col_major')) %>%
+                   filter(tran_major_abbr == "ISS O") %>%
+                   select(system_key)
+             ) %>%
   distinct()
-
 
 # TRANSCRIPTS -------------------------------------------------------------
 
@@ -238,13 +243,16 @@ create.transcripts <- function(from_yrq = YRQ_0){
     filter(first_day > '2019-01-01') %>%
     select(table_key, first_day) %>%
     mutate(yrq = as.integer(table_key),
-           cal_year = round(yrq %/% 10, 0),
+           cal_year = round(yrq / 10, 0),
            cal_qtr = round(yrq %% 10, 0))
 
   # combine with current quarter from registration
   # need to calculate attempted from the regis_courses current
   reg.courses <- tbl(con, in_schema('sec', 'registration_courses')) %>%
-    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # update for summer
+    # [TODO] handle this better
+    filter(regis_yr == suyr, regis_qtr == suqtr) %>%
     filter(!(request_status %in% c('E', 'L'))) %>%
     semi_join(db.eop) %>%
     # filter drops prior to first day using the sys.call filter above
@@ -265,7 +273,9 @@ create.transcripts <- function(from_yrq = YRQ_0){
 
   # get.current.quarter.reg <- function(){
   curr.reg <- tbl(con, in_schema('sec', 'registration')) %>%
-    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # SUMMER FIX
+    filter(regis_yr == suyr, regis_qtr == suqtr) %>%
     semi_join(db.eop) %>%
     inner_join(calc.attmp) %>%
     inner_join(calc.num.courses) %>%
@@ -337,7 +347,9 @@ get.courses.taken <- function(){
   # combine with current quarter course reg
   curr.qtr <- tbl(con, in_schema('sec', 'registration_courses')) %>%
     semi_join(db.eop) %>%
-    semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # SUMMER FIX
+    filter(regis_yr == suyr, regis_qtr == suqtr) %>%
     filter(request_status %in% c('A', 'C', 'R')) %>%
     collect() %>%
     mutate_if(is.character, trimws) %>%
@@ -498,7 +510,7 @@ create.derived.courses.taken.tscs.data <- function(){
 
   # "stem.courses"      "stem.credits"      "avg.stem.grade"    "csum.stem.courses" "csum.stem.credits"
   create.stem.data <- function(){
-    result <- tbl(con, in_schema("EDWPresentation.sec", "dmSCH_dimCurriculumCourse")) %>%
+    result <- tbl(con, in_schema(sql("EDWPresentation.sec"), "dmSCH_dimCurriculumCourse")) %>%
       filter(FederalSTEMInd == "Y") %>%
       select(dept_abbrev = CurriculumCode,
              course_number = CourseNbr,
@@ -545,9 +557,12 @@ create.wide.major.data <- function(){
   # for newest quarter
   reg.major <- tbl(con, in_schema('sec', 'registration_regis_col_major')) %>%
     semi_join(db.eop) %>%
-    inner_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # inner_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
+    # SUMMER FIX
+    filter(regis_yr == suyr, regis_qtr == suqtr) %>%
+    mutate(yrq = regis_yr*10 + regis_qtr) %>%
     select(system_key,
-           yrq = current_yrq,
+           yrq,
            index1,
            tran_yr = regis_yr,
            tran_qtr = regis_qtr,
@@ -784,7 +799,7 @@ create.late.registrations <- function(){
     select(table_key, first_day, tenth_day, last_day_add) %>%
     #collect() %>%
     mutate(yrq = as.integer(table_key),
-           regis_yr = round(yrq %/% 10, 0),
+           regis_yr = round(yrq / 10, 0),
            regis_qtr = yrq %% 10)
 
   # "fixes" still don't eliminate the extremely off dates, so I'll stick with the min and correct the ones I see right now
@@ -832,9 +847,7 @@ create.holds <- function(){
 
 
 # RUN create funcs --------------------------------------------------------------
-
-# Yes, could do more of this server-side
-# this is useful for verification
+# useful for verification, could be pushed to server side
 
 transcript <- create.transcripts()
 courses.taken <- get.courses.taken()
