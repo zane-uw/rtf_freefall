@@ -11,7 +11,7 @@ EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 
 # for summer:  [NOTE]: making this generic, not just summer. The registration qtr isn't always what I want
 filteryr <- 2022
-filterqtr <- 1
+filterqtr <- 2
 
 # **COMPASS DATA** ------------------------------------------------------------
 
@@ -174,50 +174,48 @@ currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   mutate(current_yrq = current_yr*10 + current_qtr,
          gl_regis_yrq = gl_regis_year*10 + gl_regis_qtr)
 
-# student_2 is created when a student is admitted - contains first yr/qtr, which isn't in _1
-# yrq1 <- tbl(con, in_schema("sec", "student_2")) %>%
-#   select(system_key, first_yr_regis, first_qtr_regis) %>%
-#   # inner_join(appl_ftfy, copy = T) %>%
-#   # collect() %>%
-#   mutate(first.yrq = first_yr_regis*10 + first_qtr_regis) %>%
-#   filter(first.yrq >= YRQ_0)
+# ath_tbl <- tbl(con, in_schema(sql('EDWPresentation.sec'), 'EnrolledStudent')) %>%
+#   semi_join( tbl(con, in_schema('sec', 'student_2_sport_code') ),
+#              by = c('SystemKey' = 'system_key'), copy = T) %>%
+#   select(system_key = SystemKey)
+#
+# db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
+#   filter(special_program %in% EOP_CODES) %>%
+#   select(system_key) %>%
+#   full_join( tbl(con, in_schema('sec', 'registration')) %>%
+#                filter(special_program %in% EOP_CODES) %>%
+#                select(system_key)
+#   ) %>%
+#   full_join( tbl(con, in_schema('sec', 'student_1')) %>%
+#                filter(spcl_program %in% EOP_CODES) %>%
+#                select(system_key)
+#   ) %>%
+#   full_join( tbl(con, in_schema(sql("EDWPresentation.sec"), 'EnrolledStudent')) %>%
+#                filter(as.numeric(SpecialProgramCode) %in% EOP_CODES) %>%
+#                select(system_key = SystemKey) %>%
+#                distinct()
+#   ) %>%
+#   # ADD ISS O students
+#   full_join( tbl(con, in_schema('sec', 'student_1_college_major')) %>%
+#                filter(major_abbr == "ISS O") %>%
+#                select(system_key)
+#   ) %>%
+#   full_join(ath_tbl) %>%
+#   distinct()
 
+# to fetch all distinct students w/ transcripts since yrq0
+# not strictly necessary since the transcript creation function will get all if we remove the semi_join
+# distinct_students <- tbl(con, in_schema("sec", "transcript")) %>%
+#   select(system_key) %>%
+#   distinct()
 
-ath_tbl <- tbl(con, in_schema(sql('EDWPresentation.sec'), 'EnrolledStudent')) %>%
-  semi_join( tbl(con, in_schema('sec', 'student_2_sport_code') ),
-             by = c('SystemKey' = 'system_key'), copy = T) %>%
-  select(system_key = SystemKey)
-
-db.eop <- tbl(con, in_schema("sec", "transcript")) %>%
-  filter(special_program %in% EOP_CODES) %>%
-  select(system_key) %>%
-  full_join( tbl(con, in_schema('sec', 'registration')) %>%
-                   filter(special_program %in% EOP_CODES) %>%
-                   select(system_key)
-            ) %>%
-  full_join( tbl(con, in_schema('sec', 'student_1')) %>%
-               filter(spcl_program %in% EOP_CODES) %>%
-               select(system_key)
-            ) %>%
-  full_join( tbl(con, in_schema(sql("EDWPresentation.sec"), 'EnrolledStudent')) %>%
-               filter(as.numeric(SpecialProgramCode) %in% EOP_CODES) %>%
-               select(system_key = SystemKey) %>%
-               distinct()
-  ) %>%
-  # ADD ISS O students
-  full_join( tbl(con, in_schema('sec', 'student_1_college_major')) %>%
-                   filter(major_abbr == "ISS O") %>%
-                   select(system_key)
-             ) %>%
-  full_join(ath_tbl) %>%
-  distinct()
 
 
 # TRANSCRIPTS -------------------------------------------------------------
 
 create.transcripts <- function(from_yrq = YRQ_0){
   transcript <- tbl(con, in_schema("sec", "transcript")) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     mutate(yrq = tran_yr*10 + tran_qtr) %>%
     filter(yrq >= from_yrq) %>%       # tran_qtr != 3, add_to_cum == 1
     select(system_key,
@@ -409,8 +407,8 @@ get.courses.taken <- function(){
 # DERIVED COURSES-TAKEN FIELDS ----------------------------------------------
 
 create.derived.courses.taken.tscs.data <- function(){
-# combining the following calculations that have `courses.taken` as a dependency and
-# return ~ equally long combined table
+  # combining the following calculations that have `courses.taken` as a dependency and
+  # return ~ equally long combined table
 
   courses.taken <- get.courses.taken()
 
@@ -891,38 +889,6 @@ stu1 <- create.stu1() %>%
             s1_high_satm,
             s1_high_act))
 
-
-# COMBINE -----------------------------------------------------------------
-
-# combine > merge datasets beginning w/ the 'wide' application data
-
-# Do this in more steps that are strictly necessary in order to facilitate in-place validation when needed
-# e.g. this potential problem of making extra work later using ML models that aren't robust to missing inputs
-# which depends on one's comfort w/ complete.cases v. more records w/ fewer columns <img-hypercube>
-# n.in <- function(source, target){
-#   su <- unique(source)
-#   tu <- unique(target)        # list input would be nice
-#   over <- sum(su %in% tu)
-#
-#   print(paste("src:", length(su), sep = " "))
-#   print(paste("targ:", length(tu), sep = " "))
-#   print(paste("overlap:", over, sep = " "))
-#   print(paste("missing from target:", length(su) - over, sep = " "))
-# }
-# n.in(sr.appl$system_key, appl.income$system_key)
-# n.in(sr.appl$system_key, appl.guardian$system_key)
-# n.in(sr.appl$system_key, appl.init.major$system_key)
-# n.in(sr.appl$system_key, appl.req.major$system_key)
-#
-# # transcript + main appl file
-# n.in(sr.appl$system_key, transcript$system_key)
-#
-# mrg.dat <- xf.trs %>%
-#   inner_join(xf.student) %>%
-#   left_join(xf.sr.appl) %>%
-#   left_join(xf.late.reg) %>%
-#   left_join(xf.stu.major) %>%
-#   left_join(xf.unmet.requests)
 
 mrg.dat <- transcript %>%
   inner_join(stu1) %>%

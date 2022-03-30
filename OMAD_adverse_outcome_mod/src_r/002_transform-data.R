@@ -15,7 +15,7 @@ library(tidyverse)
 # library(mice)
 # library(parsnip)
 # library(tidymodels)
-library(caret)
+# library(caret)
 
 setwd(rstudioapi::getActiveProject())
 set.seed(24601)
@@ -55,29 +55,27 @@ get.most.recent.file <- function(path = ".", ...){
 get.most.recent.file('OMAD_adverse_outcome_mod/data/', pattern = 'merged')
 load(get.most.recent.file('OMAD_adverse_outcome_mod/data', pattern = 'merged'))
 
-
-
 # Initial tidying up ------------------------------------------------------
 
 # remove extraneous columns
 dat <- mrg.dat %>%
-  select(-(AddDropclass:NoShow),
+  select(#-(AddDropclass:NoShow),
          -major_abbr,
          -starts_with('csum.dept.creds_'),
          -starts_with('nclass.dept_'),
-         -starts_with('cumavg.dept_'),
-         -ends_with('week_1'),
-         -ends_with('week_2'),
-         -ends_with('week_3'),
-         -ends_with('week_4'),
-         -ends_with('week_5'),
-         -ends_with('week_6'),
-         -ends_with('week_7'),
-         -ends_with('week_8'),
-         -ends_with('week_9'),
-         -ends_with('week_10'),
-         -ends_with('week_11'),
-         -ends_with('week_12')) %>%
+         -starts_with('cumavg.dept_')) %>%
+         # -ends_with('week_1'),
+         # -ends_with('week_2'),
+         # -ends_with('week_3'),
+         # -ends_with('week_4'),
+         # -ends_with('week_5'),
+         # -ends_with('week_6'),
+         # -ends_with('week_7'),
+         # -ends_with('week_8'),
+         # -ends_with('week_9'),
+         # -ends_with('week_10'),
+         # -ends_with('week_11'),
+         # -ends_with('week_12')) %>%
 # fill NAs
   replace_na(list('visit_advising' = 0,
                   'visit_ic' = 0,
@@ -105,10 +103,12 @@ adv.Y <- courses.taken %>%
 # add to dat
 dat <- dat %>% left_join(adv.Y)
 
-# remove near zero variance (cleaning)
-i <- caret::nearZeroVar(dat, foreach = T, allowParallel = T)
-dat <- dat[,-i]
-data.var.names <- names(dat)
+# TODO: move to python
+# # remove near zero variance (cleaning)
+# i <- caret::nearZeroVar(dat, foreach = T, allowParallel = T)
+# dat <- dat[,-i]
+# data.var.names <- names(dat)
+# rm(i)
 
 # [TODO]
 # calc the 1st diff in GPA - don't want to include this below b/c for 'new' data we want the diff
@@ -136,10 +136,10 @@ process.transformations <- function(df, OHE.enc = T){
                  n.w,
                  csum.w,
                  avg.stem.grade,
-                 csum.stem.credits,
+                 csum.stem.credits)
                  # ic_tot,
-                 visit_advising,
-                 visit_ic)
+                 # visit_advising,
+                 # visit_ic)
 
   # categorical/ordinal vars
   cat.vars <- Cs(class,
@@ -161,8 +161,8 @@ process.transformations <- function(df, OHE.enc = T){
                  dual_major,
                  premajor,
                  n.unmet,
-                 visit_advising,
-                 visit_ic,
+                 # visit_advising,
+                 # visit_ic,
                  n.writing,
                  n.diversity,
                  n.engl_comp,
@@ -246,8 +246,8 @@ cat.vars <- Cs(class,
                dual_major,
                premajor,
                n.unmet,
-               visit_advising,
-               visit_ic,
+               # visit_advising,
+               # visit_ic,
                n.writing,
                n.diversity,
                n.engl_comp,
