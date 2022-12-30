@@ -74,7 +74,7 @@ load('OMAD_adverse_outcome_mod/data/ALL-STU-Y-courses-taken.RData')
 
 adv.Y <- courses.taken %>%
   mutate(grade25 = if_else(numeric.grade <= 2.5, 1, 0),
-         other = if_else(grade %in% c('HW', 'I', 'NC', 'NS', 'W', 'W3', 'W4', 'W5', 'W6', 'W7'), 1, 0)) %>%
+         other = if_else(grade %in% c('RD', 'HW', 'I', 'NC', 'NS', 'W', 'W3', 'W4', 'W5', 'W6', 'W7'), 1, 0)) %>%
   group_by(system_key, yrq) %>%
   summarize(s = sum(grade25, other, na.rm = T),
             Y = if_else(s >= 1, 1, 0)) %>%
@@ -91,9 +91,32 @@ dat <- dat %>%
   arrange(system_key, yrq) %>%
   mutate(d1 = qgpa - lag(qgpa),
          d1 = if_else(is.na(d1), 0, d1),
-         rundiff = d1 + lag(d1)) %>%
+         rundiff = cumsum(d1)) %>%
   ungroup() %>%
-  select(-d1)
+  select(-d1) %>%
+  # fill some na vals
+  replace_na(list(qgpa15 = 0,
+                  qgpa20 = 0,
+                  probe = 0,
+                  eop = 0,
+                  athletics = 0,
+                  n.writing = 0,
+                  n.diversity = 0,
+                  n.engl_comp = 0,
+                  n.rsn = 0,
+                  n.vlpa = 0,
+                  n.indiv_soc = 0,
+                  n.nat_world = 0,
+                  n.gen_elective = 0,
+                  rep.courses = 0,
+                  n.w = 0,
+                  n.alt.grading = 0,
+                  stem.courses = 0,
+                  stem.credits = 0)) %>%
+  # fwd fill csum vals
+  group_by(system_key) %>%
+  fill(starts_with('csum'), .direction = 'down') %>%
+  ungroup()
 
 # run the lags and split the data
 process.transformations <- function(df, OHE.enc = T){
@@ -108,7 +131,8 @@ process.transformations <- function(df, OHE.enc = T){
                  n.w,
                  csum.w,
                  avg.stem.grade,
-                 csum.stem.credits)
+                 csum.stem.credits,
+                 rundiff)
   # ic_tot,
   # visit_advising,
   # visit_ic)

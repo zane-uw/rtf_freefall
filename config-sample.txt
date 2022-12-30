@@ -1,5 +1,5 @@
 my_datasource:
   dns: 'my_dns'
-  uid: 'my_id'
+  uid: 'my_uid'
   pwd: 'my_pwd'
-  db: 'my_database'
+  db: 'remote_database_name'
