@@ -5,7 +5,7 @@
 # Setup -------------------------------------------------------------------
 
 rm(list = ls())
-gc()
+gc(verbose = T)
 
 # library(xgboost)
 # library(xgboostExplainer)
@@ -60,7 +60,7 @@ load(get.most.recent.file('OMAD_adverse_outcome_mod/data', pattern = 'merged'))
 # remove extraneous columns
 dat <- mrg.dat %>%
   select(#-(AddDropclass:NoShow),
-         -major_abbr,
+         # -tran_major_abbr,
          -starts_with('csum.dept.creds_'),
          -starts_with('nclass.dept_'),
          -starts_with('cumavg.dept_')) %>%
@@ -225,7 +225,7 @@ dat <- process.transformations(dat, OHE.enc = F)
 # transformations will be in the python pipeline
 # as will train/test split
 write_csv(dat, 'OMAD_adverse_outcome_mod/data/transformed-data-to-py.csv')
-new.pred.data %>% filter(yrq == split.yrq) %>% select(-Y) %>% write_csv(., 'OMAD_adverse_outcome_mod/data/new-data-to-predict.csv')
+new.pred.data %>% filter(yrq == split.yrq) %>% select(-Y) %>% write_csv(., 'OMAD_adverse_outcome_mod/data/ALL-STU-new-data-to-predict.csv')
 
 cat.vars <- Cs(class,
                scholarship_type,
@@ -258,4 +258,4 @@ cat.vars <- Cs(class,
                ft)
 
 write_lines(cat.vars, 'OMAD_adverse_outcome_mod/data/cat-var-list.txt')
-write_lines(data.var.names, 'OMAD_adverse_outcome_mod/data/model-var-list.txt')
+# write_lines(data.var.names, 'OMAD_adverse_outcome_mod/data/model-var-list.txt')

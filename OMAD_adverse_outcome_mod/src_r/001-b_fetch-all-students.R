@@ -157,7 +157,7 @@ filterqtr <- 1
 
 # **SDB DATA** ----------------------------------------------------------------
 
-con <- dbConnect(odbc(), 'sdb', UID = config::get('sdb')$uid, PWD = config::get('sdb')$pwd)
+con <- dbConnect(odbc(), 'sqlserver01', UID = config::get('sdb')$uid, PWD = keyring::key_get('sdb'))
 
 # Utility tables -------------------------------------------------------------------
 # calendar
@@ -928,7 +928,7 @@ mrg.dat <- mrg.dat %>%
 # add qtr.sequence for 'time' (rough as that is)
 mrg.dat <- mrg.dat %>%
   mutate(ft = if_else(tenth_day_credits >= 12, 1, 0),
-         ft.creds.ou = tenth_day_credits - 12)) %>%
+         ft.creds.ou = tenth_day_credits - 12) %>%
   group_by(system_key) %>%
   arrange(system_key, yrq) %>%
   mutate(qtr.seq = row_number()) %>%
