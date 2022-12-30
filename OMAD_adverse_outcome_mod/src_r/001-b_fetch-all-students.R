@@ -6,12 +6,12 @@ library(odbc)
 
 setwd(rstudioapi::getActiveProject())
 
-YRQ_0 <- 20064
+YRQ_0 <- 20124
 EOP_CODES <- c(1, 2, 13, 14, 16, 17, 31, 32, 33)
 
 # for summer:  [NOTE]: making this generic, not just summer. The registration qtr isn't always what I want
-filteryr <- 2022
-filterqtr <- 2
+filteryr <- 2023
+filterqtr <- 1
 
 # **COMPASS DATA** ------------------------------------------------------------
 
@@ -174,6 +174,9 @@ currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   mutate(current_yrq = current_yr*10 + current_qtr,
          gl_regis_yrq = gl_regis_year*10 + gl_regis_qtr)
 
+# athletes and eop queries ------------------------------------------------
+
+
 # ath_tbl <- tbl(con, in_schema(sql('EDWPresentation.sec'), 'EnrolledStudent')) %>%
 #   semi_join( tbl(con, in_schema('sec', 'student_2_sport_code') ),
 #              by = c('SystemKey' = 'system_key'), copy = T) %>%
@@ -234,7 +237,8 @@ create.transcripts <- function(from_yrq = YRQ_0){
            qtr_nongrd_earned,
            over_qtr_nongrd,
            qtr_deductible,
-           over_qtr_deduct) %>%
+           over_qtr_deduct,
+           special_program) %>%
     collect() %>%
     mutate(pts = pmax(qtr_grade_points, over_qtr_grade_pt),                           # NB mssql doesn't support pmax
            attmp = pmax(qtr_graded_attmp, over_qtr_grade_at),
@@ -244,12 +248,15 @@ create.transcripts <- function(from_yrq = YRQ_0){
            tot_creds = attmp + nongrd - deduct,
            qgpa15 = if_else(qgpa <= 1.5, 1, 0),
            qgpa20 = if_else(qgpa <= 2, 1, 0),
-           probe = if_else(scholarship_type == 3, 1, 0)) %>%
+           probe = if_else(scholarship_type == 3, 1, 0),
+           eop = if_else(special_program %in% c(1, 2, 13, 14, 16, 17, 31, 32, 33), 1, 0),
+           athletics = if_else(special_program %in% c(25, 26, 27, 30, 31, 32, 33, 34, 40, 41, 42), 1, 0)) %>%
     select(-starts_with('over_qtr'),
            -qtr_grade_points,
            -qtr_graded_attmp,
            -qtr_nongrd_earned,
-           -qtr_deductible)
+           -qtr_deductible,
+           -special_program)
 
   # system calendar for filtering join
   sys.cal <-tbl(con, in_schema('sec', 'sys_tbl_39_calendar')) %>%
@@ -267,7 +274,7 @@ create.transcripts <- function(from_yrq = YRQ_0){
     # [TODO] handle this better
     filter(regis_yr == filteryr, regis_qtr == filterqtr) %>%
     filter(!(request_status %in% c('E', 'L'))) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     # filter drops prior to first day using the sys.call filter above
     left_join(sys.cal, by = c('regis_yr' = 'cal_year', 'regis_qtr' = 'cal_qtr')) %>%
     filter(!(request_status == 'D' & request_dt < first_day))
@@ -289,7 +296,7 @@ create.transcripts <- function(from_yrq = YRQ_0){
     # semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
     # changing to hard coded filters for now
     filter(regis_yr == filteryr, regis_qtr == filterqtr) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     inner_join(calc.attmp) %>%
     inner_join(calc.num.courses) %>%
     mutate(yrq = regis_yr*10 + regis_qtr) %>%
@@ -313,12 +320,12 @@ create.transcripts <- function(from_yrq = YRQ_0){
   return(result)
 }
 
-get.courses.taken <- function(){
+get.courses.taken <- function(from_yrq = YRQ_0){
 
   courses.taken <- tbl(con, in_schema("sec", "transcript_courses_taken")) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     mutate(yrq = tran_yr*10 + tran_qtr) %>%
-    filter(yrq >= YRQ_0) %>%
+    filter(yrq >= from_yrq) %>%
     select(system_key,
            yrq,
            course.index = index1,
@@ -333,8 +340,9 @@ get.courses.taken <- function(){
            honor_course,
            section_id) %>%
     collect() %>%
-    mutate_if(is.character, trimws) %>%         # doesn't work correctly remotely, unsafe to do other string mutations w/ output before trimming
+    mutate_if(is.character, trimws) %>%         # doesn't work correctly remotely (in R specifically), unsafe to do other string mutations w/ output before trimming
     # but don't want to build the course code w/ the extra whitespace :\
+    # trim + concate would work fine in sql server, etc. but for some reason it resolves oddly w/ R
     # rename(course.index = index1) %>%
     mutate(course = paste(dept_abbrev, course_number, sep = "_"),
            duplicate_indic = as.numeric(duplicate_indic),
@@ -359,7 +367,7 @@ get.courses.taken <- function(){
 
   # combine with current quarter course reg
   curr.qtr <- tbl(con, in_schema('sec', 'registration_courses')) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     # semi_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
     # changing to hard coded filters for a while
     filter(regis_yr == filteryr, regis_qtr == filterqtr) %>%
@@ -406,14 +414,14 @@ get.courses.taken <- function(){
 
 # DERIVED COURSES-TAKEN FIELDS ----------------------------------------------
 
-create.derived.courses.taken.tscs.data <- function(){
+create.derived.courses.taken.tscs.data <- function(course.data){
   # combining the following calculations that have `courses.taken` as a dependency and
   # return ~ equally long combined table
 
-  courses.taken <- get.courses.taken()
+  courses.taken <- course.data
 
   # total of fees, courses taken in different gen ed categories
-  # vlpa, qsr, etc.
+  # vlpa, rsn, etc.
   create.fees.gened.reqs <- function(){
     sched <- tbl(con, in_schema("sec", "time_schedule")) %>%
       mutate(yrq = ts_year*10 + ts_quarter) %>%
@@ -430,10 +438,10 @@ create.derived.courses.taken.tscs.data <- function(){
              writing_crs,
              diversity_crs,
              english_comp,
-             qsr,
-             vis_lit_perf_arts,
-             indiv_society,
-             natural_world,
+             rsn,
+             arts_hum,
+             social_science,
+             natural_science,
              gen_elective,
              fee_amount) %>%
       collect() %>%
@@ -448,10 +456,10 @@ create.derived.courses.taken.tscs.data <- function(){
                 n.writing = sum(writing_crs, na.rm = T),
                 n.diversity = sum(diversity_crs, na.rm = T),
                 n.engl_comp = sum(english_comp, na.rm = T),
-                n.qsr = sum(qsr, na.rm = T),
-                n.vlpa = sum(vis_lit_perf_arts, na.rm = T),
-                n.indiv_soc = sum(indiv_society, na.rm = T),
-                n.nat_world = sum(natural_world, na.rm = T),
+                n.rsn = sum(rsn, na.rm = T),
+                n.vlpa = sum(arts_hum, na.rm = T),
+                n.indiv_soc = sum(social_science, na.rm = T),
+                n.nat_world = sum(natural_science, na.rm = T),
                 n.gen_elective = sum(gen_elective, na.rm = T),
                 sum.fees = sum(fee_amount, na.rm = T)) %>%
       ungroup()
@@ -478,6 +486,10 @@ create.derived.courses.taken.tscs.data <- function(){
     return(result)
   }
 
+
+##
+# [TODO] get rid of this
+##
   # dept-wise courses, grades, etc (v. wide)
   # agg/reduce to 1 row per student + yrq + dept_abbr
   # then pivot wide
@@ -565,25 +577,28 @@ create.derived.courses.taken.tscs.data <- function(){
 
 # MAJORS ------------------------------------------------------------------
 
-create.wide.major.data <- function(){
-
+# removed the pivot
+create_major_data <- function() {
   # for newest quarter
-  reg.major <- tbl(con, in_schema('sec', 'registration_regis_col_major')) %>%
-    semi_join(db.eop) %>%
+  reg.major <-
+    tbl(con, in_schema('sec', 'registration_regis_col_major')) %>%
+    # semi_join(db.eop) %>%
     # inner_join(currentq, by = c('regis_yr' = 'gl_regis_year', 'regis_qtr' = 'gl_regis_qtr')) %>%
-    # changing to hard coded filters to work around registration time period limitations
+    # changing to filter vars to work around registration time period limitations
     filter(regis_yr == filteryr, regis_qtr == filterqtr) %>%
-    mutate(yrq = regis_yr*10 + regis_qtr) %>%
-    select(system_key,
-           yrq,
-           index1,
-           tran_yr = regis_yr,
-           tran_qtr = regis_qtr,
-           tran_major_abbr = regis_major_abbr)
+    mutate(yrq = regis_yr * 10 + regis_qtr) %>%
+    select(
+      system_key,
+      yrq,
+      index1,
+      tran_yr = regis_yr,
+      tran_qtr = regis_qtr,
+      tran_major_abbr = regis_major_abbr
+    )
 
   mjr <- tbl(con, in_schema("sec", "transcript_tran_col_major")) %>%
-    semi_join(db.eop) %>%
-    mutate(yrq = tran_yr*10 + tran_qtr) %>%
+    # semi_join(db.eop) %>%
+    mutate(yrq = tran_yr * 10 + tran_qtr) %>%
     filter(yrq >= YRQ_0) %>%
     select(system_key,
            yrq,
@@ -592,101 +607,28 @@ create.wide.major.data <- function(){
            tran_qtr,
            tran_major_abbr) %>%
     full_join(reg.major) %>%
-    mutate_if(is.character, trimws)
+    mutate_if(is.character, trimws) %>%
+    collect()                           # this will get re-used for a number of derivations
 
-  # calc double+ majors
-  dual.majors <- mjr %>%
-    mutate(dual_major = if_else(index1 == 2, 1, 0)) %>%
-    select(system_key, yrq, dual_major) %>%
-    group_by(system_key, yrq) %>%
-    filter(dual_major == max(dual_major)) %>%
-    ungroup() %>%
-    collect()
-
-  stu.major <- mjr %>%
-    filter(index1 == 1) %>%
-    select(system_key, yrq,
-           tran_major_abbr) %>%
-    collect() %>%
-    group_by(system_key) %>%
-    arrange(system_key, yrq) %>%
-    mutate(major.change = if_else(tran_major_abbr == lag(tran_major_abbr, order_by = yrq), 0, 1, missing = 0),     # once again, not everything has an MSSQL analogue
-           major.change.count = cumsum(major.change)) %>%
-    ungroup() %>%
-    # add double majors
-    inner_join(dual.majors)
-  rm(dual.majors)
-
-  stu.major$n.majors <- unlist(tapply(stu.major$tran_major_abbr,
-                                      stu.major$system_key,
-                                      function(x) { rep(seq_along(rle(x)$lengths), times = rle(x)$lengths) }))
-
-  maj_collect <- collect(mjr)
-
-  maj.w <- maj_collect %>% pivot_wider(., id_cols = c('system_key', 'yrq'), names_from = index1, names_prefix = 'maj_', values_from = tran_major_abbr)
-
-  # find: pre-major, 'N MATR', 'T NM', 'B NM'
-  maj.w$majors <- apply(maj.w[,3:ncol(maj.w)], 1, paste0, collapse = " - ")
-  maj.w$premajor <- ifelse(grepl("PRE", maj.w$majors, ignore.case = T), 1, 0)
-  maj.w$nonmatric <- ifelse(grepl("N MATR | T NM | B NM", maj.w$majors), 1, 0)
-
-  # Then do the 'classes in major' by making a larger table from major + xf.trs.courses, then reducing it
-  maj.courses.taken <- courses.taken %>%
-    select(system_key, yrq, dept_abbrev) %>%
-    left_join(maj_collect) %>%
-    mutate(course.equals.major = ifelse(tran_major_abbr == dept_abbrev, 1, 0)) %>%
-    group_by(system_key, yrq) %>%
-    summarize(n.major.courses = sum(course.equals.major)) %>%
-    group_by(system_key, add = F) %>%
-    arrange(system_key, yrq) %>%
-    mutate(csum.major.courses = cumsum(n.major.courses)) %>%
-    ungroup()
-
-  # simplify the result(s) to 1 table
-  result <- stu.major %>%
-    inner_join( select(maj.w, system_key, yrq, premajor, nonmatric) ) %>%
-    mutate(premajor = ifelse(tran_major_abbr == 'EPRMJ', 1, premajor)) %>%
-    left_join(maj.courses.taken)
-
-  return(result)
+  return(mjr)
 }
 
 
 # STUDENT_1, EDW, AGE -------------------------------------------------------
 
 create.stu1 <- function(){
-  # dimstu <- tbl(con, in_schema('EDWPresentation.sec', 'dimStudent')) %>%
-  #   semi_join(db.eop, by = c('SDBSrcSystemKey' = 'system_key'), copy = T) %>%
-  #   group_by(SDBSrcSystemKey) %>%
-  #   filter(RecordEffEndDttm == max(RecordEffEndDttm, na.rm = T)) %>%
-  #   ungroup() %>%
-  #   select(SDBSrcSystemKey,
-  #          InternationalStudentInd)
-
-  # There are no International Students in this group, don't need the above
 
   result <- tbl(con, in_schema("sec", "student_1")) %>%
     filter(last_yr_enrolled >= 2004) %>%
-    semi_join(db.eop, by = c('system_key' = 'system_key')) %>%
     select(system_key,
            s1_gender,
-           last_yr_enrolled,
-           last_qtr_enrolled,
-           admitted_for_yr,
-           admitted_for_qtr,
-           current_appl_yr,
-           current_appl_qtr,
-           current_appl_no,
-           # high_sch_ceeb_cd, # ethnic_code, hispanic_code,
            child_of_alum,
            running_start,
-           s1_high_satv,
-           s1_high_satm,
-           s1_high_act,
            resident) %>%
-    collect()
-
-  # rm(dimstu)
+    collect() %>%
+    # some fixes
+    mutate(running_start = ifelse(running_start == 'Y', 1, 0),
+           s1_gender = ifelse(s1_gender == 'F', 1, 0))
 
   return(result)
 }
@@ -698,7 +640,7 @@ calc.adjusted.age <- function(){
 
   bd <- tbl(con, in_schema('sec', 'student_1')) %>%
     select(system_key, birth_dt) %>%
-    semi_join(db.eop) %>%
+    # semi_join(db.eop) %>%
     inner_join( tbl(con, in_schema('sec', 'registration')) %>%
                   select(system_key, regis_yr, regis_qtr) ) %>%
     mutate(table_key = paste0('0', as.character(regis_yr), as.character(regis_qtr), ' '))
@@ -723,7 +665,6 @@ create.application.data <- function(){
 
   # create an in-db filtering file for the applications
   app.filter <- tbl(con, in_schema("sec", "student_1")) %>%
-    inner_join(db.eop) %>%
     select(system_key,
            appl_yr = current_appl_yr,
            appl_qtr = current_appl_qtr,
@@ -733,7 +674,6 @@ create.application.data <- function(){
   # ...get (many) --------------------------------------------------------
 
   gpa <- tbl(con, in_schema('sec', 'sr_adm_appl')) %>%
-    semi_join(db.eop) %>%
     group_by(system_key) %>%
     summarize(high_sch_gpa = max(high_sch_gpa, na.rm = T),
               trans_gpa = max(trans_gpa, na.rm = T)) %>%
@@ -758,14 +698,17 @@ create.application.data <- function(){
     inner_join(gpa) %>%
     mutate(trans_gpa = na_if(trans_gpa, 0),
            high_sch_gpa = na_if(high_sch_gpa, 0))
+  # ! #
+  # test scores no longer required
+  # ! #
 
-  # best test scores
-  appl.hist <- tbl(con, in_schema("sec", "APPLHistApplication")) %>%
-    filter(appl_type %in% c(1, 2, 4, 6, "R"),
-           appl_yr >= 2003,
-           appl_status %in% c(11, 12, 15, 16, 26)) %>%
-    select(system_key, appl_yr, appl_qtr, appl_no, best_satr_v, best_satr_m, best_satr_c) %>%
-    semi_join(app.filter)
+  # # best test scores
+  # appl.hist <- tbl(con, in_schema("sec", "APPLHistApplication")) %>%
+  #   filter(appl_type %in% c(1, 2, 4, 6, "R"),
+  #          appl_yr >= 2003,
+  #          appl_status %in% c(11, 12, 15, 16, 26)) %>%
+  #   select(system_key, appl_yr, appl_qtr, appl_no, best_satr_v, best_satr_m, best_satr_c) %>%
+  #   semi_join(app.filter)
 
   appl.guardian <- tbl(con, in_schema("sec", "sr_adm_appl_guardian_data")) %>%
     semi_join(app.filter) %>%
@@ -779,7 +722,7 @@ create.application.data <- function(){
     # full_join(appl.req.major) %>%
     # full_join(appl.init.major) %>%
     # full_join(appl.income) %>%
-    full_join(appl.hist) %>%
+    # full_join(appl.hist) %>%
     full_join(appl.guardian) %>%
     collect() %>%
     mutate_if(is.character, trimws)
@@ -792,9 +735,12 @@ create.application.data <- function(){
 # UNMET ADD REQ'S ---------------------------------------------------------
 
 create.unmet.requests <- function(){
+  # unexpectedly getting a SQL error w/ %/%
+  temp_yr0 <- YRQ_0 %/% 10
+
   unmet.reqs <- tbl(con, in_schema('sec', 'sr_unmet_request')) %>%
-    filter(unmet_yr >= 2006) %>%
-    semi_join(db.eop, by = c("unmet_system_key" = "system_key")) %>%
+    # filter(unmet_yr >= YRQ_0 %/% 10) %>%
+    filter(unmet_yr >= temp_yr0) %>%
     group_by(unmet_system_key, unmet_yr, unmet_qtr) %>%
     summarize(n.unmet = n()) %>%
     ungroup() %>%
@@ -812,14 +758,12 @@ create.late.registrations <- function(){
   syscal <- tbl(con, in_schema("sec", "sys_tbl_39_calendar")) %>%
     filter(first_day >= "2004-01-01") %>%                           # arbitrary, some kind of limit is helpful
     select(table_key, first_day, tenth_day, last_day_add) %>%
-    #collect() %>%
     mutate(yrq = as.integer(table_key),
            regis_yr = round(yrq / 10, 0),
            regis_qtr = yrq %% 10)
 
   # "fixes" still don't eliminate the extremely off dates, so I'll stick with the min and correct the ones I see right now
   regc <- tbl(con, in_schema("sec", "registration_courses")) %>%
-    semi_join(db.eop) %>%
     mutate(yrq = regis_yr*10 + regis_qtr) %>%
     filter(yrq >= YRQ_0) %>%
     select(system_key, yrq, add_dt_tuit) %>%
@@ -835,9 +779,7 @@ create.late.registrations <- function(){
   regc$reg.late.binary <- if_else(regc$reg.late.days >= 0, 1, 0)
 
   result <- regc %>%
-    select(system_key, yrq, reg.late.binary) # reg.late.days,
-
-  # rm(syscal, regc)
+    select(system_key, yrq, reg.late.binary)
 
   return(result)
 
@@ -851,13 +793,93 @@ create.holds <- function(){
   holds <- tbl(con, in_schema("sec", "student_1_hold_information")) %>%
     inner_join(cal, by = c('hold_dt' = 'dt')) %>%
     collect() %>%
-    semi_join(db.eop, copy = T) %>%
     group_by(system_key, yrq) %>%
     summarize(n.holds = n()) %>%
     ungroup() %>%
     mutate(yrq = as.numeric(yrq))
 }
 
+
+# major transformations ---------------------------------------------------
+
+major_xforms <- function(major_data, courses_taken_data){
+
+  # calc double+ majors
+  dual.majors <- major_data %>%
+    mutate(dual_major = if_else(index1 >= 1, 1, 0)) %>%
+    select(system_key, yrq, dual_major) %>%
+    group_by(system_key, yrq) %>%
+    summarize(dual_major = max(dual_major)) %>%
+    ungroup()
+
+  stu.major <- major_data %>%
+    filter(index1 == 1) %>%
+    select(system_key, yrq, tran_major_abbr) %>%
+    group_by(system_key) %>%
+    arrange(system_key, yrq) %>%
+    mutate(
+      major.change = if_else(
+        tran_major_abbr == lag(tran_major_abbr, order_by = yrq),
+        0,
+        1,
+        missing = 0
+      ),
+      major.change.count = cumsum(major.change
+      )
+    ) %>%
+    ungroup() # %>%
+
+  stu.major$n.majors <- unlist(tapply(stu.major$tran_major_abbr,
+                                      stu.major$system_key,
+                                      function(x) {
+                                        rep(seq_along(rle(x)$lengths), times = rle(x)$lengths)
+                                      }))
+
+  # setup some filtered views of the major codes for derived variables
+  sr.maj.codes <- tbl(con, in_schema("sec", "sr_major_code")) %>%
+    select(-contains('_spare_'),
+           -contains('_types_')) %>%
+    collect()
+
+  pre.codes <- sr.maj.codes %>% filter(major_premaj == TRUE) %>% distinct(trimws(major_abbr)) %>% pull()
+  ext.codes <- sr.maj.codes %>% filter(major_premaj_ext == TRUE) %>% distinct(trimws(major_abbr)) %>% pull()
+  # coding does not have same meaning for non-matric
+
+  premajors <- major_data %>%
+    mutate(
+      tran_major_abbr = trimws(tran_major_abbr),
+      premajor = if_else(tran_major_abbr %in% pre.codes, 1, 0),
+      ext_premajor = if_else(tran_major_abbr %in% ext.codes, 1, 0),
+      nonmatric = if_else(tran_major_abbr %in% c('N MATR', 'T NM', 'B NM'), 1, 0)) %>%
+    # 'collapse' to 1 row
+    group_by(system_key, yrq) %>%
+    summarize(premajor = max(premajor, na.rm = T),
+              ext_premajor = max(ext_premajor, na.rm = T),
+              nonmatric = max(nonmatric, na.rm = T)) %>%
+    ungroup()
+
+  # Then do the 'classes in major' by making a larger table from major + xf.trs.courses, then reducing it
+  # I don't like this actually, shouldn't be referencing courses.taken w/in this fun
+  maj.courses.taken <- courses_taken_data %>%
+    select(system_key, yrq, dept_abbrev) %>%
+    left_join(stu.major) %>%
+    mutate(course.equals.major = ifelse(tran_major_abbr == dept_abbrev, 1, 0)) %>%
+    group_by(system_key, yrq) %>%
+    summarize(n.major.courses = sum(course.equals.major)) %>%
+    group_by(system_key, add = F) %>%
+    arrange(system_key, yrq) %>%
+    mutate(csum.major.courses = cumsum(n.major.courses)) %>%
+    ungroup()
+
+  # compile into 1 table
+  result <- stu.major %>%
+    inner_join(dual.majors) %>%
+    inner_join(premajors) %>%
+    left_join(maj.courses.taken) %>%
+    mutate_if(is.numeric, replace_na, 0)
+
+  return(result)
+}
 
 
 
@@ -866,28 +888,17 @@ create.holds <- function(){
 
 transcript <- create.transcripts()
 courses.taken <- get.courses.taken()
-derived.courses.taken.data <- create.derived.courses.taken.tscs.data()
-majors <- create.wide.major.data()
+# derived.courses.taken.data <- create.derived.courses.taken.tscs.data()
+raw.major.data <- create_major_data()
 stu.age <- calc.adjusted.age() # need to fix this for extra current q
-appl.data <- create.application.data() %>% select(-c(appl_yr, appl_qtr, appl_no))
+appl.data <- create.application.data()
 unmet.reqs <- create.unmet.requests()
 late.reg <- create.late.registrations()
 holds <- create.holds()
+stu1 <- create.stu1()
 
-stu1 <- create.stu1() %>%
-  # some fixes
-  mutate(running_start = ifelse(running_start == 'Y', 1, 0),
-         s1_gender = ifelse(s1_gender == 'F', 1, 0)) %>%
-  select(-c(last_yr_enrolled,
-            last_qtr_enrolled,
-            admitted_for_yr,
-            admitted_for_qtr,
-            current_appl_yr,
-            current_appl_qtr,
-            current_appl_no,
-            s1_high_satv,
-            s1_high_satm,
-            s1_high_act))
+derived.courses.taken.data <- create.derived.courses.taken.tscs.data(course.data = courses.taken)
+majors <- major_xforms(major_data = raw.major.data, courses_taken_data = courses.taken)
 
 
 mrg.dat <- transcript %>%
@@ -895,7 +906,7 @@ mrg.dat <- transcript %>%
   left_join(appl.data, by = c('system_key' = 'system_key')) %>%
   left_join(holds) %>%
   left_join(late.reg) %>%
-  left_join(majors) %>% rename(major_abbr = tran_major_abbr) %>%  # may want to keep this
+  left_join(majors) %>%
   left_join(stu.age) %>%
   left_join(unmet.reqs) %>%
   # left_join(compass.feats) %>%
@@ -908,27 +919,20 @@ mrg.dat <- transcript %>%
 # (i <- sapply(mrg.dat, is.character))
 # apply(mrg.dat[,i], 2, unique)
 
-# Fix logical vars for modeling
+# coerce logical vars for modeling
 names(mrg.dat)[sapply(mrg.dat, is.logical)]
 mrg.dat <- mrg.dat %>%
   mutate_if(is.logical, as.numeric)
 
 # Full time = 12 credits
 # add qtr.sequence for 'time' (rough as that is)
-# and extended premajor
 mrg.dat <- mrg.dat %>%
   mutate(ft = if_else(tenth_day_credits >= 12, 1, 0),
-         ft.creds.over = if_else(tenth_day_credits >= 12, tenth_day_credits - 12, 0),
-         ext_premajor = if_else(major_abbr == 'EPRMJ', 1, 0)) %>%
+         ft.creds.ou = tenth_day_credits - 12)) %>%
   group_by(system_key) %>%
   arrange(system_key, yrq) %>%
   mutate(qtr.seq = row_number()) %>%
   ungroup()
-
-# mrg.dat$n.unmet[is.na(mrg.dat$n.unmet)] <- 0
-# mrg.dat$s1_high_act[mrg.dat$s1_high_act == 0] <- NA
-# mrg.dat$s1_high_satm[mrg.dat$s1_high_satm == 0] <- NA
-# mrg.dat$s1_high_satv[mrg.dat$s1_high_satv == 0] <- NA
 
 # aggregate IC variables
 # ic <- mrg.dat %>% select(starts_with('IC', ignore.case = F))
@@ -947,5 +951,6 @@ mrg.dat <- mrg.dat %>%
 
 # save --------------------------------------------------------------------
 
-save(mrg.dat, file = paste0('OMAD_adverse_outcome_mod/data/merged-sdb-compass_', Sys.Date(), '.RData'))
-save(courses.taken, file = 'OMAD_adverse_outcome_mod/data/Y-courses-taken.RData')
+# save(mrg.dat, file = paste0('OMAD_adverse_outcome_mod/data/merged-sdb-compass_', Sys.Date(), '.RData'))
+save(mrg.dat, file = paste0('OMAD_adverse_outcome_mod/data/ALL-STU-merged_', Sys.Date(), '.RData'))
+save(courses.taken, file = 'OMAD_adverse_outcome_mod/data/ALL-STU-Y-courses-taken.RData')
