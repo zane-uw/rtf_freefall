@@ -157,16 +157,12 @@ filterqtr <- 1
 
 # **SDB DATA** ----------------------------------------------------------------
 
-con <- dbConnect(odbc(), 'sqlserver01', UID = config::get('sdb')$uid, PWD = keyring::key_get('sdb'))
+con <- dbConnect(odbc(), 'sdb', UID = config::get('sdb')$uid, PWD = keyring::key_get('sdb'))
 
 # Utility tables -------------------------------------------------------------------
 # calendar
 # current year, quarter
 # filtering query for EOP students
-
-# academic calendar
-cal <- tbl(con, in_schema(sql("EDWPresentation.sec"), "dimDate")) %>%
-  select(yrq = AcademicQtrKeyId, dt = CalendarDate)
 
 currentq <- tbl(con, in_schema("sec", "sdbdb01")) %>%
   select(current_yr, current_qtr, gl_first_day, gl_regis_year, gl_regis_qtr) %>%
@@ -790,6 +786,10 @@ create.late.registrations <- function(){
 
 create.holds <- function(){
 
+  # academic calendar
+  cal <- tbl(con, in_schema(sql("EDWPresentation.sec"), "dimDate")) %>%
+    select(yrq = AcademicQtrKeyId, dt = CalendarDate)
+
   holds <- tbl(con, in_schema("sec", "student_1_hold_information")) %>%
     inner_join(cal, by = c('hold_dt' = 'dt')) %>%
     collect() %>%
@@ -897,6 +897,7 @@ late.reg <- create.late.registrations()
 holds <- create.holds()
 stu1 <- create.stu1()
 
+# this is for the target variable, derived from students' course transcripts in each term
 derived.courses.taken.data <- create.derived.courses.taken.tscs.data(course.data = courses.taken)
 majors <- major_xforms(major_data = raw.major.data, courses_taken_data = courses.taken)
 
